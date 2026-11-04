@@ -33,6 +33,10 @@ OFM（Our Free Model）上游自带一个本地网关：在本机起一个兼容
 
 ### 1. 安装
 
+> [!IMPORTANT]
+> **签名变更**：从 v0.8.3 起使用专用签名密钥（证书 SHA-256 `42f84523…54e6a236`）。
+> 安装过 v0.8.2 及更早测试包的用户，需**先卸载旧版**再安装（签名不同，无法覆盖升级）。旧包使用的是已弃用的公开开发证书。
+
 - 系统要求：**Android 8.0（API 26）及以上**，**仅支持 arm64-v8a** 设备。
 - 安装包约 **67 MB**（其中 Magpie 引擎约 61 MB），这是内置完整运行时的代价。
 - 从本仓库 [Releases](https://github.com/luoyi0914/ofm-gateway-android/releases) 下载 APK 安装。
@@ -163,7 +167,7 @@ MainActivity (Compose UI)
 # 产物：app/build/outputs/apk/{debug,release}/app-{debug,release}.apk
 ```
 
-- 签名：`keystore/ofm-release.jks`（alias `ofm`，**不入库**）；口令与别名可通过 `OFM_STORE_PASSWORD` / `OFM_KEY_ALIAS` / `OFM_KEY_PASSWORD` 环境变量或 `local.properties` 覆盖。**分发前请务必替换为自有密钥。**
+- 签名：官方包使用专用 4096 位 RSA 密钥（alias `ofm`，有效期 100 年），密钥文件与口令**均不入库**；构建时从 `OFM_STORE_PASSWORD` / `OFM_KEY_ALIAS` / `OFM_KEY_PASSWORD` 环境变量或 `local.properties`（`ofm.storeFile` / `ofm.storePassword` / `ofm.keyAlias` / `ofm.keyPassword`）读取，缺任一口令时 release 构建直接失败，不会用默认值兜底。自行构建请生成自己的密钥。
 - `buildNative` / `syncNative` 自动 `cargo build` 并同步 `libofm_gateway.so`；`prepareRuntimeLibs` / `verifyRuntimeLibs` 在打包前强制生效，缺库会直接让构建失败，避免打出「无运行时」的包。
 
 ### 真机验收清单

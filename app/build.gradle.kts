@@ -15,8 +15,8 @@ android {
         applicationId = "cn.luoyi0914.ofmgateway"
         minSdk = 26
         targetSdk = 37
-        versionCode = 14
-        versionName = "0.8.2-dev"
+        versionCode = 15
+        versionName = "0.8.3-dev"
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -24,14 +24,17 @@ android {
 
     signingConfigs {
         create("release") {
-            // 凭据不写死：优先环境变量，其次 local.properties，最后回退开发默认值（仅本地调试）。
+            // 凭据只从环境变量或 local.properties 读取，代码里不留任何默认口令。
             val props = Properties()
             val lf = rootProject.file("local.properties")
             if (lf.isFile) lf.inputStream().use { props.load(it) }
-            storeFile = rootProject.file("keystore/ofm-release.jks")
-            storePassword = System.getenv("OFM_STORE_PASSWORD") ?: props.getProperty("ofm.storePassword") ?: "ofmdevpass"
-            keyAlias = System.getenv("OFM_KEY_ALIAS") ?: props.getProperty("ofm.keyAlias") ?: "ofm"
-            keyPassword = System.getenv("OFM_KEY_PASSWORD") ?: props.getProperty("ofm.keyPassword") ?: "ofmdevpass"
+            fun secret(env: String, key: String): String? =
+                System.getenv(env) ?: props.getProperty(key)
+            val storePath = props.getProperty("ofm.storeFile") ?: "keystore/ofm-release.jks"
+            storeFile = rootProject.file(storePath)
+            storePassword = secret("OFM_STORE_PASSWORD", "ofm.storePassword")
+            keyAlias = secret("OFM_KEY_ALIAS", "ofm.keyAlias") ?: "ofm"
+            keyPassword = secret("OFM_KEY_PASSWORD", "ofm.keyPassword")
         }
     }
 
