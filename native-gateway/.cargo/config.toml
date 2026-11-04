@@ -1,0 +1,2 @@
+# NDK linker is injected by Gradle via CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER env var.
+# See app/build.gradle.kts buildNative task. No hardcoded paths here.
