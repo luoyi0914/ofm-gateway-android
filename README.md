@@ -1,20 +1,139 @@
-# OFM Gateway Android
+# OFM Gateway · Android
 
-独立 Android APK 工程；**不修改**上游的 Magisk/KernelSU 模块，自带完整运行时，安装即用，无需 root/Shizuku。
+> 把 Our Free Model 的本机网关做成一款**自带全部运行时的 Android 应用**——装好就能用，无需 root、无需 Shizuku、无需 Termux。
 
-## 当前状态
+OFM（Our Free Model）上游自带一个本地网关：在本机起一个兼容 OpenAI 协议的 HTTP 服务，供各类 AI 客户端接入。但它原本是跟着宿主环境跑的。本项目把同一套服务、同版本的 Node 运行时与 Magpie 模型引擎一起打进 APK，让它在手机上以普通应用的身份常驻运行。
 
-- UI：**Android 原生 Material 3**（Compose），四页底部导航：首页 / 模型列表 / 日志 / 设置；品牌色板 light+dark、状态 hero 卡、矢量图标、危险操作二次确认。
-- 运行时：APK 内置 Node（`libnode.so`）、Magpie 引擎（`libmagpie.so`）及全部 `.so` 依赖，以及上游 OFM 服务代码（`assets/app/`，首启解压到私有目录 `filesDir/ofm-runtime/app`）。
-- 进程监督：Rust JNI（`libofm_gateway.so`）真实 `spawn` / 停止 Node 进程（进程组 SIGTERM→SIGKILL），日志按天写入 `filesDir/ofm-runtime/logs/gateway-YYYY-MM-DD.log`。
-- 前台服务承载网关（`foregroundServiceType=specialUse`，常驻通知）；开机自启可在设置页开关（默认关闭）。
-- 端口：默认 **127.0.0.1:15000**（`--no-lan`，仅本机可访问）；实际端口以 `ofm-data/settings.json` 的 `standalonePort` 为准，UI 动态读取。
-- Shizuku/root 特权后端仍为**明确不可用的占位实现**。
-- 仅 `arm64-v8a`；`minSdk 26`；`compileSdk/targetSdk 37`。
+| 首页 | 模型列表 | 日志 |
+| --- | --- | --- |
+| ![首页](docs/screenshots/home.jpg) | ![模型列表](docs/screenshots/models.jpg) | ![日志](docs/screenshots/logs.jpg) |
 
-> 说明：以上为服务器端构建 + 静态/产物校验结果；真机验收由使用者按下方清单完成。
+> **上游声明前提**：本项目不实现任何模型能力，只是把上游服务搬运到 Android 上运行。模型额度、地区限制、账号渠道与上游条款，均由上游决定。
+>
+> **姊妹项目**：同一套运行时的 [Magisk / KernelSU 模块版](https://github.com/luoyi0914/ofm-gateway-magisk)——需要 root 时用它（开机静默常驻、端口 `15656`）；没有 root，或者想要一个能可视化操作的界面，就用本 APK（端口 `15000`）。两者数据目录独立，可共存。
 
-## 工具链
+---
+
+## 核心特性
+
+| 特性 | 说明 |
+| --- | --- |
+| **安装即用** | APK 内置 Node 运行时、Magpie 引擎与上游服务代码，首启自动解包到应用私有目录，不依赖 root / Shizuku / Termux |
+| **原生 Material 3 界面** | Compose 实现，底部四页：首页 / 模型列表 / 日志 / 设置；自带浅色 + 深色两套品牌色板 |
+| **真实进程监督** | Rust JNI（`libofm_gateway.so`）直接 `spawn` / 停止 Node 进程；停止时对**整个进程组**发 SIGTERM，超时再 SIGKILL，不留 Magpie 孙进程 |
+| **前台服务保活** | 以 `foregroundServiceType=specialUse` 常驻，系统通知栏常驻提示；按 Home 回到桌面后网关仍可访问 |
+| **状态一眼可见** | 首页状态卡直接给出运行中 / 未启动、监听地址、PID、端口、服务版本，启停按钮就在同一张卡上 |
+| **按天日志** | 日志按本地日期切分为 `gateway-YYYY-MM-DD.log`，长时间运行也会在本地午夜自动滚动 |
+| **一键反馈** | 日志页可「复制 / 分享 / 提交议题到仓库」，议题正文自动附带诊断信息与最近日志 |
+| **仅本机监听** | 网关固定以 `--no-lan` 启动，只监听 `127.0.0.1`；网络安全配置默认禁止明文流量，仅放行回环地址 |
+
+---
+
+## 快速开始
+
+### 1. 安装
+
+- 系统要求：**Android 8.0（API 26）及以上**，**仅支持 arm64-v8a** 设备。
+- 安装包约 **67 MB**（其中 Magpie 引擎约 61 MB），这是内置完整运行时的代价。
+- 从本仓库 [Releases](https://github.com/luoyi0914/ofm-gateway-android/releases) 下载 APK 安装。
+
+### 2. 启动网关
+
+1. 首次打开会解包运行时（约数秒），首页状态从「准备中」变为「就绪（未启动）」。
+2. 点「启动」——状态变为「运行中」，显示 PID 与监听端口，通知栏出现常驻通知。
+3. 点「打开管理页」进入网关注入的网页控制台；启动时日志里会打印一次性登录链接（约 10 分钟有效，登录一次即失效）。
+
+### 3. 接入你自己的 AI 客户端
+
+首页「服务入口」区域显示两个地址，可直接复制：
+
+- **API 地址**：`http://127.0.0.1:15000/v1`（兼容 OpenAI 接口的基础地址）
+- **API Key**：首页「凭据」卡片中查看 / 复制（默认脱敏显示）
+
+网关提供 `GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses` 等上游已实现的接口，具体可用模型取决于上游的渠道与账号状态——「模型列表」页就是从 `/v1/models` 实时拉取的结果。
+
+> 实际监听端口以服务写入的 `settings.json` 中的 `standalonePort` 为准，应用界面会动态读取，不写死。
+
+### 4. 停止
+
+点「停止」会弹出二次确认；确认后端口立即不可达，并清理整个进程组。设置页可打开「开机自启」（默认关闭）。
+
+---
+
+## 适用人群
+
+**适合你，如果：**
+
+- 你想在手机上跑一个**本机 AI 网关**，让其他 App、脚本或浏览器页面通过 `127.0.0.1` 调用模型；
+- 你手里只有一台手机，**不想 root、不想装 Shizuku、不想折腾 Termux**；
+- 你已经了解上游 OFM 的工作方式，只想把它搬进一个 Android 应用里长期挂着；
+- 你需要能自己排障的东西：按天日志、PID / 端口可见、一键把日志带进议题。
+
+**不适合你，如果：**
+
+- 你需要 `x86_64` / 32 位设备——本项目**只打包 `arm64-v8a`**；
+- 你希望从局域网或公网访问这个网关——当前**强制关闭局域网**（`--no-lan`），只监听回环；需要局域网请用模块版；
+- 你需要稳定的生产级 SLA——这是自带完整运行时的个人向工具，仍在早期版本；
+- 你不想处理上游账号与额度——本项目不提供任何模型额度。
+
+---
+
+## 常见问题（FAQ）
+
+**Q：需要 root 吗？需要 Shizuku 吗？**
+不需要。应用以普通应用身份运行，网关靠前台服务保活。Shizuku / root 特权后端目前是**明确不可用的占位实现**。
+
+**Q：启动后回到桌面，浏览器里的管理页还能打开吗？**
+设计目标是能——前台服务常驻，网关不随 Activity 销毁。请把它列进系统的后台省电白名单；不同厂商的省电策略差异较大，这是最常见的「跑着跑着就没了」的原因。
+
+**Q：为什么包这么大？**
+因为要把运行时一起打包：Node（约 43 MB）、Magpie 引擎（约 61 MB）、ICU 数据等依赖库，合计压缩后约 67 MB。好处是装完立即可用，不需要额外下载任何运行时。
+
+**Q：端口可以改成别的吗？**
+CLI 启动参数固定为 `--port 15000`。实际端口以服务写入的 `settings.json` 中 `standalonePort` 为准，界面会动态读取；如果设备上 15000 被占用，请关注日志中的实际端口。
+
+**Q：日志在哪？**
+应用私有目录下 `ofm-runtime/logs/gateway-YYYY-MM-DD.log`，按本地日期切分。日志页可选择日期、复制或分享，导出范围与所选日期一致。
+
+**Q：应用里的「提交议题到仓库」会把我上传到哪？**
+它会打开浏览器，在**本仓库**预填一个 issue（标题 + 诊断信息 + 最近日志），由你的 GitHub 账号确认提交。应用本身不持有任何 GitHub 凭据。日志以纯文本塞进正文（截断到 4000 字符），附件不会被真正上传；需要完整日志请用「复制 / 分享日志」。提交前正文里的 `#login=` 一次性链接会统一脱敏为 `***`。
+
+**Q：和 Magisk / KernelSU 模块版有什么区别？**
+模块版要求 root，开机由系统层拉起，端口默认 `15656`，可开局域网中继；本项目是普通 APK，前台服务承载，端口默认 `15000`，界面内可直接看状态、模型与日志。两者同源（同一份上游服务、同一版 Magpie 引擎），数据目录互相独立。设置页有到模块仓库的跳转入口。
+
+---
+
+## 技术说明
+
+### 架构
+
+```
+MainActivity (Compose UI)
+   └── GatewayService (前台服务, specialUse)
+         ├── RuntimeInstaller: assets/app → filesDir/ofm-runtime/app（按 versionCode 打标记）
+         └── NativeGateway (JNI) ──► libofm_gateway.so (Rust)
+                                        └── spawn: nativeLibraryDir/libnode.so packages/standalone/cli.mjs
+                                              --data-dir filesDir/ofm-data --port 15000 --no-lan
+                                              └── OFM_MAGPIE_BINARY → libmagpie.so
+```
+
+### 工程结构
+
+- `app/`：Android UI（Material 3 Compose）、生命周期、`RuntimeInstaller`（assets 解包）、`NativeGateway`（JNI 边界）、`GatewayService`、`LogStore`、`ServiceInfo`、`ApiClient`、`ConsoleActivity`、`IssueReporter`。
+- `native-gateway/`：Rust JNI crate，导出 `nativeRuntimeAvailable / nativeStatus / nativeStart / nativeStop / nativePid`。
+- `app/src/main/assets/app/`：上游服务源码，首启复制到私有目录。
+- `app/src/main/jniLibs/arm64-v8a/`：`libofm_gateway.so`（入库）；`libnode.so`、`libmagpie.so` 及其依赖库由脚本生成，**不入库**。
+
+### 关键实现
+
+1. **原生库无版本名改写**：Android Gradle 只打包 `*.so`，而 Node 的 `DT_NEEDED` 引用带版本号的 soname。`scripts/prepare-runtime-libs.sh` 解析 ELF 动态段，**成对改写 `DT_NEEDED` 与 `DT_SONAME`** 为无版本名（原位覆盖，不改变文件布局），安装后直接从 `nativeLibraryDir` 加载，规避 Android 10+ 对可写目录 exec 的限制。
+2. **16 KB 页对齐**：所有 `LOAD` 段按 16 KB 对齐，满足 Android 15+ / targetSdk ≥ 35 的要求；Magpie 引擎用 NDK 29 + `-Wl,-z,max-page-size=16384` 重编。
+3. **运行时依赖注入**：`nativeStart` 在 spawn 前注入 `LD_LIBRARY_PATH`、`OFM_MAGPIE_BINARY`、`OFM_HOME`、`OFM_MANAGED_ROOT`、`HOME`、`TMPDIR`、`XDG_CACHE_HOME`；子进程以独立进程组启动（`process_group(0)`）。
+4. **陈旧锁判定**：启动前读取 `ofm-data/service.lock` 中的 pid，只有该 pid 仍存在于 `/proc` 才跳过启动，否则清锁后启动——**不**用「端口有监听」判定归属，避免误判被其他进程占用的端口。
+5. **停止语义**：先对整个进程组发 SIGTERM 让 Node 有机会释放锁，轮询至多 3 秒后再 SIGKILL；只有确实终止了自己的子进程时才清理锁文件。
+6. **凭据脱敏**：日志页的复制 / 分享 / 提交议题统一经 `ServiceInfo.scrubToken()`，一次性 `#login=` 链接替换为 `***`。
+
+### 工具链
 
 | 组件 | 版本 |
 | --- | --- |
@@ -22,33 +141,18 @@
 | Android Gradle Plugin | 9.5.0 |
 | Kotlin | 2.4.21 |
 | Compose BOM | 2026.09.00 |
-| activity-compose | 1.13.0 |
-| material-icons-core | 随 Compose BOM |
 | NDK | 29.0.14206865 |
 | build-tools | 37.0.0 |
 | Rust | 1.99.1（target `aarch64-linux-android`） |
+| 内置 Node 运行时 | v24.18.0 |
+| minSdk / targetSdk | 26 / 37 |
 
-## 工程结构
+### 从源码构建
 
-- `app/`：Android UI（Material 3 Compose）、生命周期、`RuntimeInstaller`（assets 解包）、`NativeGateway`（JNI 边界）、`GatewayService`、`LogStore`、`ServiceInfo`、`ApiClient`、`ConsoleActivity`。
-- `native-gateway/`：Rust JNI crate（`src/lib.rs`），导出 `nativeRuntimeAvailable/nativeStatus/nativeStart/nativeStop/nativePid`。
-- `app/src/main/assets/app/`：上游 OFM 服务源码（首启复制到私有目录）。
-- `app/src/main/jniLibs/arm64-v8a/`：`libofm_gateway.so`（入库）及构建时生成的 `libnode.so`、`libmagpie.so` 与依赖库（不入库）。
-
-## 关键实现说明
-
-1. **原生库命名**：Android Gradle 只打包 `*.so`，而 Node 的 `verneed`/`DT_NEEDED` 引用带版本号（如 `libcrypto.so.3`）。`scripts/prepare-runtime-libs.sh` 解析 ELF 动态段，成对改写 `DT_NEEDED` 与 `DT_SONAME`，统一为无版本名，安装后从 `nativeLibraryDir` 加载/执行，规避 Android 10+ 对可写目录 exec 的限制。
-2. **16 KB 页对齐**：所有 `.so` 的 `LOAD` 段按 16 KB 对齐，满足 Android 15+ / targetSdk≥35 要求；Magpie 引擎用 NDK 29 + `-Wl,-z,max-page-size=16384` 重编。
-3. **运行时依赖注入**：`nativeStart` 注入 `LD_LIBRARY_PATH`、`OFM_MAGPIE_BINARY`、`OFM_HOME`、`HOME`、`TMPDIR`、`XDG_CACHE_HOME`、`OFM_MANAGED_ROOT` 后启动 Node。
-4. **陈旧锁处理**：启动前读取 `ofm-data/service.lock` 中的 pid，仅当该进程仍在 `/proc` 中存在才跳过启动；否则清理后启动，避免与孤儿进程并发。
-5. **凭据脱敏**：一次性 `#login=` 链接在日志导出、复制、分享、提交议题前统一替换为 `***`。
-
-## 构建
-
-首次构建前先还原原生运行时库（jniLibs 内派生的 `.so` 不入库）：
+派生运行库不入库，clean clone 首次构建前需要先还原（依赖构建机上的受控运行时产物）：
 
 ```bash
-./scripts/prepare-runtime-libs.sh   # 从 ../../.cache 提取 Node/Magpie 并改写 soname
+./scripts/prepare-runtime-libs.sh   # 提取 Node/Magpie 并改写 soname
 ```
 
 随后：
@@ -59,31 +163,55 @@
 # 产物：app/build/outputs/apk/{debug,release}/app-{debug,release}.apk
 ```
 
-- 正式包签名密钥：默认 `keystore/ofm-release.jks`（alias `ofm`，**不入库**）。口令与别名可通过 `OFM_STORE_PASSWORD` / `OFM_KEY_ALIAS` / `OFM_KEY_PASSWORD` 环境变量或 `local.properties` 覆盖。请务必替换为自有密钥后再分发。
-- `buildNative` / `syncNative` Gradle 任务会自动 `cargo build` 并同步 `libofm_gateway.so`；`prepareRuntimeLibs` / `verifyRuntimeLibs` 负责派生运行库的生成与校验，构建前强制生效（clean clone 可直接构建）。NDK/链接器由 `local.properties` 的 `sdk.dir` + `android.ndkVersion` 解析。
+- 签名：`keystore/ofm-release.jks`（alias `ofm`，**不入库**）；口令与别名可通过 `OFM_STORE_PASSWORD` / `OFM_KEY_ALIAS` / `OFM_KEY_PASSWORD` 环境变量或 `local.properties` 覆盖。**分发前请务必替换为自有密钥。**
+- `buildNative` / `syncNative` 自动 `cargo build` 并同步 `libofm_gateway.so`；`prepareRuntimeLibs` / `verifyRuntimeLibs` 在打包前强制生效，缺库会直接让构建失败，避免打出「无运行时」的包。
 
-## 真机验收清单
+### 真机验收清单
 
-1. 安装并首次启动：观察是否解包运行时（首启约数秒），UI 状态从「准备中」变为「就绪（未启动）」。
-2. 点「启动」→ 状态变为「运行中」、显示 PID 与端口、通知栏出现常驻通知。
-3. 「打开管理页」可无登录进入（一次性链接有效期内）。
-4. 模型列表页能拉到 `/v1/models` 返回的模型；模型 ID 可长按复制。
-5. 日志页按天切换、复制/分享内容与所选日期一致。
-6. 按 Home 回到桌面后，浏览器仍能访问 `http://127.0.0.1:15000`（检验前台保活）。
-7. 「停止」弹出确认，确认后端口立即不可达、Magpie 无残留进程。
+1. 安装并首次启动：观察运行时解包，状态从「准备中」变为「就绪（未启动）」。
+2. 点「启动」→ 状态「运行中」、显示 PID 与端口、通知栏出现常驻通知。
+3. 「打开管理页」可进入；日志中可见一次性登录链接。
+4. 模型列表页能拉到 `/v1/models` 返回的模型，模型 ID 可长按复制。
+5. 日志页按天切换，复制 / 分享内容与所选日期一致。
+6. 按 Home 回桌面后，浏览器仍能访问 `http://127.0.0.1:<端口>`。
+7. 「停止」确认后端口立即不可达，无残留 Magpie 进程。
 8. 深色模式与 360dp 窄屏下无文字截断、无系统栏遮挡。
 
-## 尚未覆盖（诚实边界）
+---
 
-- 未在本仓库内置 adb/模拟器做自动化验收，上述清单由真机手动执行。
-- Shizuku/root 特权提升未接入。
-- 上游 OFM 服务代码来自上游发布包，业务逻辑差异仅在 Android 沙箱适配层。
+## 与上游的一处必要差异
 
-## 与上游内置服务的一处必要差异（Android 适配）
+**符号链接检查范围收窄。** 上游 `packages/standalone/library.mjs` 的 `inspect()` 会从文件系统根逐级检查路径上每段是否为符号链接，遇到即抛 `Symlinks are not allowed in managed storage`。Android 的应用数据目录上方存在系统级符号链接别名（如 `/data/data` → `/data/user/0`），从根检查在真机上必然失败。
 
-`app/src/main/assets/app/packages/standalone/library.mjs` 的 `inspect()` 原本从文件系统根
-逐级检查路径上每一段是否符号链接，遇到即抛 `Symlinks are not allowed in managed storage`。
-Android 应用数据目录上方存在系统级符号链接别名（如 `/data/data` -> `/data/user/0`），
-从根检查会在真机上必然失败。现改为：仅对宿主注入的 `OFM_MANAGED_ROOT`（应用私有 files 根）
-及其以下路径禁止符号链接，系统级别名放行；未设置该环境变量时保持上游原行为。
-宿主（Rust `nativeStart`）会注入 `OFM_MANAGED_ROOT=<filesDir>`。
+现改为：**仅对宿主注入的 `OFM_MANAGED_ROOT`（应用私有 files 根）及其以下路径**禁止符号链接，系统级别名放行；未设置该环境变量时保持上游原行为。其余业务逻辑不做改动。
+
+---
+
+## 免责声明与法律边界
+
+本项目是**非官方**的 Android 打包工程，与上游项目、任何模型供应商均无隶属或背书关系。
+
+- **上游来源**：服务代码取自 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)（MIT）；Magpie 引擎取自 [yetone/magpie](https://github.com/yetone/magpie)（MIT，钉子 `6a900e0d048e592cbc9120dd2c3f515aab9ef04a`，以 `nogui` 标签构建）；渠道实现基于 Jet（iJetLi）的 MIT 渠道包再构建。各自的 `LICENSE` 与 `NOTICE` 随 `assets/app/vendor/` 一同分发。
+- **Node 运行时**：取自早期官方 Android 安装包，其分发许可需由使用者自行确认；若你是权利人且不希望被这样分发，请开 issue 告知，我们会移除相关制品。
+- **不提供任何额度或账号**：本项目不包含、不代理、不出售任何模型 API 额度；模型可用性、地区限制、账号渠道规则完全由上游及其供应商决定。
+- **不做模型内容担保**：模型输出由上游服务与供应商产生，本项目不对其准确性、合法性或适合作性做任何保证。
+- **仅本机监听**：网关固定 `--no-lan`，不开放局域网 / 公网访问；即便自行修改为监听局域网，也请评估暴露风险。
+- **按「现状」提供**：本项目按 MIT 许可「AS IS」提供，不附带任何明示或默示担保。使用本项目造成的账号风险、数据损失或其他后果由使用者自行承担。
+- **合规使用**：请遵守上游项目条款、各模型供应商的服务条款以及你所在地区的法律法规。不建议将其用于任何规避供应商限制的用途。
+
+---
+
+## 开发与反馈
+
+- 应用内「提交议题到仓库」直接指向本仓库；设置页有到[模块版仓库](https://github.com/luoyi0914/ofm-gateway-magisk)与[上游服务](https://github.com/Ebony-Vinyl/dsh-our-free-model)的入口。
+- 当前为早期版本，版本号带 `-dev` 的构建属测试通道。
+
+## 许可
+
+本仓库自有代码（Android UI、Rust JNI 监督器、构建脚本）以 [MIT](LICENSE) 许可发布。随包分发的第三方组件保留其原有许可，见上文与 `assets/app/vendor/*/LICENSE`。
+
+## 相关项目
+
+- 上游服务：[Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)
+- 同源 Magisk / KernelSU 模块版：[luoyi0914/ofm-gateway-magisk](https://github.com/luoyi0914/ofm-gateway-magisk)
+- Magpie 模型引擎：[yetone/magpie](https://github.com/yetone/magpie)

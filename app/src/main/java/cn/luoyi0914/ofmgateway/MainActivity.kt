@@ -308,6 +308,8 @@ private fun AppShell(filesDirPath: String, onStart: () -> Unit, onStop: () -> Un
                     },
                     onOpenConsole = { openConsole(context, loginUrl ?: ServiceInfo.baseUrl(port)) },
                     running = running,
+                    onOpenModuleRepo = { openUrl(context, IssueReporter.moduleRepoUrl()) },
+                    onOpenAppRepo = { openUrl(context, IssueReporter.appRepoUrl()) },
                 )
             }
         }
@@ -763,6 +765,8 @@ private fun SettingsScreen(
     running: Boolean,
     onToggleBoot: () -> Unit,
     onOpenConsole: () -> Unit,
+    onOpenModuleRepo: () -> Unit,
+    onOpenAppRepo: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -793,6 +797,27 @@ private fun SettingsScreen(
                 enabled = running,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(if (running) "打开管理控制台" else "启动网关后可用") }
+        }
+
+        SectionTitle("两个仓库")
+        CardBox {
+            Text(
+                "本应用与 Magisk / KernelSU 模块共用同一套上游服务与运行时，只是宿主管道不同：",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider()
+            InfoRow("本应用（APK）", "无需 root，沙箱内运行，适合日常使用")
+            HorizontalDivider()
+            InfoRow("Magisk 模块", "需 root，模块内运行，可静默开机自启、增量升级")
+            HorizontalDivider()
+            OutlinedButton(onClick = onOpenModuleRepo, modifier = Modifier.fillMaxWidth()) {
+                Text("查看 Magisk / KernelSU 模块仓库")
+            }
+            OutlinedButton(
+                onClick = onOpenAppRepo,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) { Text("查看应用仓库与更新日志") }
         }
 
         SectionTitle("关于")

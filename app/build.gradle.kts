@@ -15,8 +15,8 @@ android {
         applicationId = "cn.luoyi0914.ofmgateway"
         minSdk = 26
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.8.1-dev"
+        versionCode = 14
+        versionName = "0.8.2-dev"
         ndk {
             abiFilters += "arm64-v8a"
         }

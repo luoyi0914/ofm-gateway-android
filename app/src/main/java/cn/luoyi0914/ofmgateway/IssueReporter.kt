@@ -14,8 +14,14 @@ import java.net.URLEncoder
  * 提供「复制日志 / 分享日志」。
  */
 object IssueReporter {
-    const val REPO = "luoyi0914/ofm-gateway-magisk"
+    /** 应用自身仓库：APK 相关问题默认提交到这里。 */
+    const val REPO = "luoyi0914/ofm-gateway-android"
+    /** 配套 Magisk / KernelSU 模块仓库：用于两条产品线互相引导。 */
+    const val MODULE_REPO = "luoyi0914/ofm-gateway-magisk"
     private const val MAX_LOG_IN_BODY = 4000
+
+    fun moduleRepoUrl(): String = "https://github.com/$MODULE_REPO"
+    fun appRepoUrl(): String = "https://github.com/$REPO"
 
     fun buildIssueUrl(title: String, body: String): String {
         return "https://github.com/$REPO/issues/new" +
@@ -25,8 +31,10 @@ object IssueReporter {
 
     /** 组装 issue 正文：诊断元信息 + 日志文本。 */
     fun composeBody(diagnostic: String, logText: String): String {
-        val trimmed = if (logText.length <= MAX_LOG_IN_BODY) logText
-        else logText.takeLast(MAX_LOG_IN_BODY)
+        // 公开议题：一次性 #login= 链接必须先脱敏，避免把管理凭据贴到公网。
+        val scrubbed = ServiceInfo.scrubToken(logText)
+        val trimmed = if (scrubbed.length <= MAX_LOG_IN_BODY) scrubbed
+        else scrubbed.takeLast(MAX_LOG_IN_BODY)
         return buildString {
             appendLine("### 问题描述")
             appendLine("<!-- 请简要描述遇到的问题（启动失败 / 端口不通 / 性能异常等） -->")
