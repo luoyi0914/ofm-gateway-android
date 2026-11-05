@@ -43,6 +43,16 @@ function engineError(message, statusCode = 503) {
   return Object.assign(new Error(message), { statusCode })
 }
 
+const STDERR_LIMIT = 8192
+
+/** Strip anything token-shaped so captured engine output is safe to persist. */
+function redact(text) {
+  return text
+    .replace(/sk-magpie-key-[A-Za-z0-9]+/g, '[redacted]')
+    .replace(/ofm-[A-Za-z0-9_\-]{16,}/g, '[redacted]')
+    .replace(/[A-Za-z0-9_\-]{40,}/g, '[redacted]')
+}
+
 function localPath(value) {
   if (typeof value !== 'string') throw engineError('Invalid engine path', 400)
   let decoded = value.split('?')[0]
@@ -698,37 +708,74 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
     await closeLease(lock)
     lock = null
   }
+  // Which step of boot() we are on. Every failure path is a plain throw, so the
+  // only reliable way to place a failure on the phone is to record the step as
+  // we go and report it alongside the error.
+  let stage = 'idle'
+  const at = name => { stage = name }
+
+  // Diagnostic tail for a dead child: exit status plus the first meaningful
+  // stderr line. Magpie's own secret (the web key) is passed by environment,
+  // never echoed, but token-shaped text is stripped defensively before this
+  // text can reach the management console or the log file.
+  const describeFailure = () => {
+    const parts = []
+    if (spawnFailed) parts.push(spawnError?.code ? `spawn ${spawnError.code}` : 'spawn failed')
+    else if (exitSignal) parts.push(`signal ${exitSignal}`)
+    else if (exitCode !== null) parts.push(`exit ${exitCode}`)
+    const line = stderrHead.split('\n').map(text => text.trim()).find(text => text.length > 0)
+    if (line) parts.push(redact(line).slice(0, 240))
+    if (stage !== 'idle') parts.unshift(`at ${stage}`)
+    return parts.length > 0 ? ` (${parts.join('; ')})` : ''
+  }
+  const describeCause = failure => {
+    const parts = [stage === 'idle' ? '' : `at ${stage}`].filter(Boolean)
+    if (typeof failure?.code === 'string') parts.push(failure.code)
+    const text = typeof failure?.message === 'string' ? failure.message.trim() : ''
+    if (text !== '') parts.push(redact(text).slice(0, 240))
+    return parts.length === 0 ? '' : ` (${parts.join('; ')})`
+  }
   const boot = async () => {
+    at('resume')
     await recovering
     assertOpen()
+    at('materialize')
     if (!binary && !existsSync(executable) && entry?.compressed) {
       executable = await materializeEngine({ pkgDir: fileURLToPath(new URL('../', import.meta.url)), dataDir, entry })
       assertOpen()
     }
+    at('locate')
     if (!existsSync(executable)) throw engineError('Magpie engine binary is unavailable')
+    at('resolve-binary')
     const beside = path.dirname(await realpath(executable))
     if (existsSync(path.join(beside, '.portable')) || existsSync(path.join(beside, 'data'))) {
       throw engineError('Engine portable data would override private configuration')
     }
+    at('verify')
     if (!binary) {
       if (!entry?.sha256) throw engineError('Magpie engine provenance is unavailable')
       const digest = createHash('sha256')
       for await (const chunk of createReadStream(executable)) digest.update(chunk)
       if (digest.digest('hex') !== entry.sha256) throw engineError('Magpie engine binary checksum mismatch')
     }
+    at('prepare-home')
     await mkdir(home, { recursive: true, mode: 0o700 })
     assertOpen()
+    at('lease')
     lock = await ownerLease(home)
     const controller = new AbortController()
     runController = controller
     try {
+      at('prepare-dirs')
       const dirs = Object.fromEntries(['config', 'cache', 'data', 'state'].map(name => [name, path.join(home, name)]))
       for (const dir of [...Object.values(dirs), path.join(dirs.config, 'magpie')]) {
         await mkdir(dir, { recursive: true, mode: 0o700 })
       }
       const config = path.join(dirs.config, 'magpie')
+      at('read-settings')
       const prefs = await jsonFile(path.join(config, 'settings.json'), { noAccountDiscovery: true, noStats: true, noUsageStats: true })
       if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) throw engineError('Invalid engine settings')
+      at('pick-ports')
       let gatewayPort = prefs.port
       if (gatewayPort !== undefined && (!Number.isInteger(gatewayPort) || gatewayPort < 1024 || gatewayPort > 65535)) {
         throw engineError('Saved engine gateway port is invalid')
@@ -746,16 +793,19 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
       } else gatewayPort = await freePort()
       let webPort = await freePort()
       while (webPort === gatewayPort) webPort = await freePort()
+      at('read-keys')
       const keys = await jsonFile(path.join(config, 'caller-keys.json'), [])
       if (!Array.isArray(keys)) throw engineError('Invalid engine key store')
       const ownedID = INTERNAL_KEY_ID
       const savedKey = keys.find(key => key?.id === ownedID)?.secret
       gatewayKey = typeof savedKey === 'string' && /^sk-magpie-key-[a-f0-9]{64}$/.test(savedKey)
         ? savedKey : `sk-magpie-key-${randomBytes(32).toString('hex')}`
+      at('write-keys')
       await writeJSON(path.join(config, 'caller-keys.json'), [
         ...keys.filter(key => key?.id !== ownedID),
         { id: ownedID, name: 'Our Free Model engine', secret: gatewayKey },
       ])
+      at('write-settings')
       await writeJSON(path.join(config, 'settings.json'), {
         ...prefs, port: gatewayPort, lan: false,
         noAutoUpdate: true, noAutoDownload: true, autoRestart: false,
@@ -764,6 +814,7 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
       webURL = `http://127.0.0.1:${webPort}`
       gatewayURL = `http://127.0.0.1:${gatewayPort}`
       cookie = `magpie_web_${webPort}=${webKey}`
+      at('build-env')
       const env = { ...process.env }
       // An inherited Magpie override must never redirect this owned instance.
       for (const key of Object.keys(env)) if (key.toUpperCase().startsWith('MAGPIE_')) delete env[key]
@@ -774,14 +825,27 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
         MAGPIE_NO_SHORTCUT: '1',
       })
       assertOpen()
+      // stderr is captured, not discarded: without it every startup failure
+      // (bad ABI, missing system library, refused option, panic) collapses into
+      // one useless sentence. Only the head is kept, and it is redacted below.
+      at('spawn')
       child = spawn(executable, ['web', '--addr', `127.0.0.1:${webPort}`, '--no-open'], {
-        cwd: home, env, stdio: 'ignore', shell: false, windowsHide: true,
+        cwd: home, env, stdio: ['ignore', 'ignore', 'pipe'], shell: false, windowsHide: true,
       })
       const owned = child
       let spawnFailed = false
+      let spawnError = null
+      let exitCode = null
+      let exitSignal = null
+      let stderrHead = ''
+      child.stderr?.setEncoding('utf8')
+      child.stderr?.on('data', chunk => {
+        if (stderrHead.length < STDERR_LIMIT) stderrHead += chunk.slice(0, STDERR_LIMIT - stderrHead.length)
+      })
+      child.stderr?.on('error', () => {})
       exited = new Promise(resolve => {
-        child.once('error', () => { spawnFailed = true; resolve() })
-        child.once('exit', resolve)
+        child.once('error', failure => { spawnFailed = true; spawnError = failure; resolve() })
+        child.once('exit', (code, signal) => { exitCode = code; exitSignal = signal; resolve() })
       })
       exited.then(() => {
         if (child !== owned) return
@@ -799,10 +863,13 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
           })().catch(() => { error = 'Magpie engine cleanup failed' })
         }
       })
+      at('readiness')
       const deadline = Date.now() + START_TIMEOUT
       while (Date.now() < deadline) {
         assertOpen()
-        if (spawnFailed || child.exitCode !== null || child.signalCode !== null) throw engineError('Magpie engine failed to start')
+        if (spawnFailed || child.exitCode !== null || child.signalCode !== null) {
+          throw engineError(`Magpie engine failed to start${describeFailure()}`)
+        }
         try {
           // /api is not a route upstream; use its authenticated JSON /api/settings
           // rather than mistaking the static file server's 404 for readiness.
@@ -814,7 +881,7 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
           if (response.ok && body && typeof body === 'object' && !Array.isArray(body)) {
             assertOpen()
             if (controller.signal.aborted || spawnFailed || owned.exitCode !== null || owned.signalCode !== null) {
-              throw engineError('Magpie engine failed to start')
+              throw engineError(`Magpie engine failed to start${describeFailure()}`)
             }
             state = 'ready'
             note()
@@ -843,8 +910,17 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
     state = 'starting'
     error = null
     starting = boot().catch(failure => {
-      if (!closed) { state = 'error'; error = failure.statusCode ? failure.message : 'Magpie engine could not start' }
-      throw engineError(error || 'Engine is closed')
+      // A failure without statusCode is a raw syscall/fs error. Naming it beats
+      // reporting that the engine "could not start": the sentence alone gave
+      // no way to tell a permissions problem from a bad binary.
+      const reason = failure?.statusCode
+        ? failure.message
+        : `Magpie engine could not start${describeCause(failure)}`
+      if (!closed) { state = 'error'; error = reason }
+      // Persisted with the service log so the failure survives the console being
+      // closed, and can be read on the phone without a debugger.
+      try { logger?.warn?.(`Magpie engine start failed: ${reason}`) } catch {}
+      throw engineError(reason)
     }).finally(() => { starting = null })
     return starting
   }
