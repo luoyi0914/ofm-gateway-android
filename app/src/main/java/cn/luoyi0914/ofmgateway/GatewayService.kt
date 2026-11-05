@@ -143,8 +143,17 @@ class GatewayService : Service() {
             Intent(this, GatewayService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        // 能拿到一次性令牌时直接进管理控制台，拿不到就退回主界面——不做一个点了没反应的按钮。
+        val loginUrl = ServiceInfo.loginUrl(filesDirPath, port)
+        val consoleIntent = loginUrl?.let {
+            PendingIntent.getActivity(
+                this, 2,
+                Intent(this, ConsoleActivity::class.java).putExtra(ConsoleActivity.EXTRA_URL, it),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        }
         val text = if (status == GatewayStatus.RUNNING) "127.0.0.1:$port · 运行中" else status.label
-        return Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             // 自带的单色小图标：系统「上传完成」图标会让用户误以为是别的任务。
             .setSmallIcon(cn.luoyi0914.ofmgateway.R.drawable.ic_notification)
             .setContentTitle("OFM 网关")
@@ -153,7 +162,10 @@ class GatewayService : Service() {
             .addAction(Notification.Action.Builder(null, "停止", stopIntent).build())
             .setOngoing(true)
             .setShowWhen(false)
-            .build()
+        if (consoleIntent != null) {
+            builder.addAction(Notification.Action.Builder(null, "管理页", consoleIntent).build())
+        }
+        return builder.build()
     }
 
     /** 状态变化时更新常驻通知；文案跟着真实状态走，不写死「运行中」。 */

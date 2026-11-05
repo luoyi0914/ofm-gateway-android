@@ -42,6 +42,8 @@ data class GatewayUiState(
     val newerRelease: UpdateChecker.Release? = null,
     /** 用户选定的推荐模型：用于接入片段与「复制接入信息」，不影响网关本身。 */
     val preferredModel: String? = null,
+    /** 首次使用引导是否还该显示（用户点过「知道了」就永久关闭）。 */
+    val showOnboarding: Boolean = false,
 ) {
     val running: Boolean get() = status.running
     val canStart: Boolean get() = runtimeInstalled && !running && !busy
@@ -67,6 +69,7 @@ class GatewayRepository(private val context: Context) {
 
     private companion object {
         const val KEY_MODEL = "preferred_model"
+        const val KEY_ONBOARD = "onboarding_done"
     }
 
     private var pollJob: Job? = null
@@ -105,6 +108,7 @@ class GatewayRepository(private val context: Context) {
                 android.content.pm.PackageManager.PERMISSION_GRANTED
         } else true
         val preferredModel = prefs.getString(KEY_MODEL, null)?.takeIf { it.isNotBlank() }
+        val onboard = !prefs.getBoolean(KEY_ONBOARD, false)
         val optimizing = runCatching {
             val pm = context.getSystemService(android.os.PowerManager::class.java)
             pm?.isIgnoringBatteryOptimizations(context.packageName) != true
@@ -116,6 +120,7 @@ class GatewayRepository(private val context: Context) {
                 notificationGranted = granted,
                 batteryOptimized = optimizing,
                 preferredModel = preferredModel,
+                showOnboarding = onboard,
             )
         }
     }
@@ -209,6 +214,12 @@ class GatewayRepository(private val context: Context) {
     fun reportLog(): String = LogStore.reportLog(filesDirPath, _state.value.selectedDay)
 
     fun diagnostic(): String = Diagnostics.build(context, _state.value)
+
+    /** 关掉首次引导；这是纯界面偏好，与网关状态无关。 */
+    fun dismissOnboarding() {
+        prefs.edit().putBoolean(KEY_ONBOARD, true).apply()
+        _state.update { it.copy(showOnboarding = false) }
+    }
 
     /** 选/取消推荐模型；只影响接入片段，网关不关心这个值。 */
     fun setPreferredModel(model: String?) {

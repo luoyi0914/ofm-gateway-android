@@ -191,6 +191,7 @@ private fun SectionGap() = Spacer(Modifier.height(12.dp))
 @Composable
 private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
     var confirmStop by remember { mutableStateOf(false) }
+    var showDiag by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val notify: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
@@ -199,6 +200,40 @@ private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         PageHeader("OFM 网关", "本机运行的 OpenAI 兼容网关，数据不出设备")
+
+        if (state.showOnboarding) {
+            CardBox {
+                Text("第一次用，三步上手", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                listOf(
+                    "① 点下面的「启动」，状态变绿说明网关已在跑。",
+                    "② 去「模型」页刷新列表，点一次「选它」存下你要用的模型。",
+                    "③ 回到这里复制接入信息，填进你自己的 AI 客户端（同一台手机）。",
+                ).forEach { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                Text(
+                    "网关只监听 127.0.0.1：电脑连不上属正常，不是配置错误。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { repository.dismissOnboarding() }) { Text("知道了") }
+                    if (!state.running) {
+                        TextButton(onClick = { repository.startGateway() }, enabled = state.canStart) {
+                            Text(if (state.busy) "启动中…" else "直接启动")
+                        }
+                    }
+                }
+            }
+            SectionGap()
+        }
 
         CardBox {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -237,6 +272,7 @@ private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("停止") }
                 OutlinedButton(onClick = { repository.probePort() }) { Text("检测端口") }
+                OutlinedButton(onClick = { showDiag = true }) { Text("一键体检") }
             }
             if (state.probe != null) {
                 Spacer(Modifier.height(8.dp))
@@ -258,6 +294,32 @@ private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
             InfoRow("局域网", "未开启（仅本机可访问）")
             InfoRow("服务版本", state.version ?: "—")
             InfoRow("应用版本", state.appVersion)
+        }
+
+        if (showDiag) {
+            val text = repository.diagnostic()
+            AlertDialog(
+                onDismissRequest = { showDiag = false },
+                title = { Text("体检结果") },
+                text = {
+                    SelectionContainer {
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        clipboard.setText(AnnotatedString(text))
+                        notify("已复制诊断信息（不含密钥）")
+                        showDiag = false
+                    }) { Text("复制并关闭") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDiag = false }) { Text("关闭") }
+                },
+            )
         }
 
         SectionGap()
