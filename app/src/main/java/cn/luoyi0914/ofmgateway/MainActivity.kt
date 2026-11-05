@@ -696,13 +696,17 @@ private fun SettingsScreen(state: GatewayUiState, repository: GatewayRepository)
             if (state.batteryOptimized) {
                 TextButton(
                     onClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-                            )
-                        }.onFailure { notify("该系统没有该设置页") }
+                        // 直接弹系统的「忽略电池优化」确认框，比自己翻列表成功率高得多；
+                        // 少数 ROM 移除了该 action，再退回设置列表。
+                        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                            .setData(Uri.parse("package:${context.packageName}"))
+                        val ok = runCatching { context.startActivity(direct) }.isSuccess ||
+                            runCatching {
+                                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                            }.isSuccess
+                        if (!ok) notify("该系统没有电池优化设置页")
                     },
-                ) { Text("去设置") }
+                ) { Text("加入白名单") }
             }
         }
 
