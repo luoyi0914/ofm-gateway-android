@@ -23,7 +23,7 @@
 
 `SHA256`：
 ```
-4515c8abee0273b1fdb2a270c0557fb43b157ad873f9c5ecccca6b0cdada3f3c  OFM-Gateway-0.9.0-arm64-v8a-release.apk
+84ef8e730b170fd0cb44f437b3ed46ba4712296c89bd1477764078c215ce6e0a  OFM-Gateway-0.9.0-arm64-v8a-release.apk
 ```
 
 ### 已知限制
