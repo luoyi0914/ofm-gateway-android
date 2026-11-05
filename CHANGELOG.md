@@ -37,14 +37,16 @@
 - 诊断信息明确不含 API Key、管理密钥与登录链接（议题是公开的）。
 - 看门狗退避 5s→10s→20s→40s→60s 上限，运行时缺失这类不可恢复状态只如实显示、不空转重启。
 - 常驻通知按真实状态显示端口与文案，并带「停止」操作。
+- 设置页新增「检查更新」：读应用仓库最新 Release 比对版本，只提示不自动安装，
+  12 小时内不重复请求；版本比较按数字段（`0.10.0` > `0.9.0`）并有单测覆盖。
 
 ### 工程
 
 - R8 打开（含资源压缩），JNI 方法名与四个入口类显式保留；release 体积从 69.9MB 降到 60MiB。
 - 版本号单一事实源 `version.properties`，Gradle、CI、发版脚本读同一处。
 - 新增 `scripts/verify-release.sh`：校验版本、ABI、证书指纹、v2+v3 签名、非 debuggable、
-  体积预算、zip 16KB 对齐、14 个原生库齐全、每个 `.so` 的 PT_LOAD 16KB 对齐与 DT_NEEDED 可解析。
-- 新增 15 个 JVM 单元测试（脱敏规则、日志过滤、状态映射）。
+  体积预算、zip 16KB 对齐、13 个运行库 + 1 个 JNI 库齐全、每个 `.so` 的 PT_LOAD 16KB 对齐与 DT_NEEDED 可解析。
+- 新增 27 个 JVM 单元测试（脱敏规则、登录令牌、日志过滤、状态映射、版本比较）。
 - 新增 GitHub Actions 发版流水线：preflight（无密钥）→ build（需审批）→ publish（先发 pre-release）。
 - 新增 `scripts/fetch-runtime-bundle.sh`：运行时从固定 Release 拉取并校验 SHA-256，不再依赖本地缓存。
 

@@ -39,6 +39,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -542,6 +543,8 @@ private fun LogsScreen(state: GatewayUiState, repository: GatewayRepository) {
 private fun SettingsScreen(state: GatewayUiState, repository: GatewayRepository) {
     val context = LocalContext.current
     val notify: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    // 进设置页时顺带查一次更新；内部按 12 小时节流，不会每切一次页面就打一次 API。
+    LaunchedEffect(Unit) { repository.checkUpdate() }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
@@ -613,6 +616,20 @@ private fun SettingsScreen(state: GatewayUiState, repository: GatewayRepository)
                 onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(IssueReporter.appRepoUrl()))) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("查看应用仓库与更新日志") }
+            val release = state.newerRelease
+            if (release != null) {
+                Spacer(Modifier.height(6.dp))
+                FilledTonalButton(
+                    onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.url))) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("发现新版本 ${release.version}，去下载") }
+            } else {
+                Spacer(Modifier.height(6.dp))
+                TextButton(
+                    onClick = { repository.checkUpdate(force = true); notify("正在检查更新…") },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("检查更新") }
+            }
         }
 
         SectionGap()

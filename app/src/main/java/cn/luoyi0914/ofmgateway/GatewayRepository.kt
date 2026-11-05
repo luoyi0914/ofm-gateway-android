@@ -38,6 +38,8 @@ data class GatewayUiState(
     val notificationGranted: Boolean = true,
     val batteryOptimized: Boolean = false,
     val busy: Boolean = false,
+    /** 新版本提示；null 表示已是最新或尚未检查。 */
+    val newerRelease: UpdateChecker.Release? = null,
 ) {
     val running: Boolean get() = status.running
     val canStart: Boolean get() = runtimeInstalled && !running && !busy
@@ -197,4 +199,23 @@ class GatewayRepository(private val context: Context) {
     fun reportLog(): String = LogStore.reportLog(filesDirPath, _state.value.selectedDay)
 
     fun diagnostic(): String = Diagnostics.build(context, _state.value)
+
+    /**
+     * 检查更新（进设置页时调用，12 小时内不重复打 API）。
+     *
+     * 只做提示：常驻服务不自动下载安装，避免在用户不知情时替换正在运行的组件。
+     */
+    fun checkUpdate(force: Boolean = false) {
+        if (!force && !UpdateChecker.shouldCheck(context)) return
+        scope.launch {
+            val current = _state.value.appVersion
+            val result = withContext(Dispatchers.IO) { UpdateChecker.fetchLatest() }
+            result.onSuccess { release ->
+                UpdateChecker.markChecked(context)
+                _state.update {
+                    it.copy(newerRelease = release.takeIf { r -> UpdateChecker.isNewer(r.version, current) })
+                }
+            }
+        }
+    }
 }
