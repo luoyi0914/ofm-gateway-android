@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { existsSync, readFileSync, createReadStream } from 'node:fs'
-import { mkdir, readFile, writeFile, rename, link, unlink, realpath } from 'node:fs/promises'
+import { mkdir, open, readFile, writeFile, rename, link, unlink, realpath } from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
@@ -30,6 +30,10 @@ const MAX_ACTIVE = 128
 const MAX_HTML = 4 * 1024 * 1024
 const MAX_KEY_BODY = 64 * 1024
 const START_TIMEOUT = 45_000
+// Filesystems that cannot represent hard links reject link() with one of these.
+// EPERM is what Linux reports for a FAT/exFAT target; EACCES shows up on some
+// FUSE-backed Android volumes; ENOTSUP/EOPNOTSUPP cover other mount types.
+const NO_HARDLINK_CODES = new Set(['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS'])
 const hopHeaders = new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
   'te', 'trailer', 'transfer-encoding', 'upgrade',
@@ -255,12 +259,23 @@ async function ownerLease(home) {
     const lease = await bindLease()
     const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`
     try {
-      await writeFile(temp, JSON.stringify({
+      const record = JSON.stringify({
         version: 1, port: lease.address().port, pid: process.pid, token: randomBytes(16).toString('hex'),
-      }), { mode: 0o600, flag: 'wx' })
+      })
+      await writeFile(temp, record, { mode: 0o600, flag: 'wx' })
       restrictPermissions(temp)
       // Atomic publication never overwrites another owner's lease record.
-      await link(temp, file)
+      try {
+        await link(temp, file)
+      } catch (error) {
+        // Some Android volumes (sdcardfs/FUSE-backed app storage, FAT/exFAT
+        // removable media) reject hard links outright. O_EXCL still gives the
+        // same guarantee: create-or-fail, never clobbering another owner.
+        if (!NO_HARDLINK_CODES.has(error?.code)) throw error
+        const handle = await open(file, 'wx', 0o600)
+        try { await handle.writeFile(record) } finally { await handle.close() }
+        restrictPermissions(file)
+      }
       return lease
     } catch (error) {
       await closeLease(lease)
@@ -714,6 +729,15 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
   let stage = 'idle'
   const at = name => { stage = name }
 
+  // Spawn outcome, shared with describeFailure() below. These live in the
+  // factory scope on purpose: the reporter is built once, while boot() may run
+  // again after a restart, so each run resets them just before spawning.
+  let spawnFailed = false
+  let spawnError = null
+  let exitCode = null
+  let exitSignal = null
+  let stderrHead = ''
+
   // Diagnostic tail for a dead child: exit status plus the first meaningful
   // stderr line. Magpie's own secret (the web key) is passed by environment,
   // never echoed, but token-shaped text is stripped defensively before this
@@ -833,11 +857,11 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
         cwd: home, env, stdio: ['ignore', 'ignore', 'pipe'], shell: false, windowsHide: true,
       })
       const owned = child
-      let spawnFailed = false
-      let spawnError = null
-      let exitCode = null
-      let exitSignal = null
-      let stderrHead = ''
+      spawnFailed = false
+      spawnError = null
+      exitCode = null
+      exitSignal = null
+      stderrHead = ''
       child.stderr?.setEncoding('utf8')
       child.stderr?.on('data', chunk => {
         if (stderrHead.length < STDERR_LIMIT) stderrHead += chunk.slice(0, STDERR_LIMIT - stderrHead.length)
