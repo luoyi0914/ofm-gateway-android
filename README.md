@@ -186,7 +186,7 @@ MainActivity (Compose UI)
 发版前必须过产物校验（读包本身，不看构建日志）：
 
 ```bash
-./scripts/verify-release.sh app/build/outputs/apk/release/app-release.apk --expect-version 0.9.0
+./scripts/verify-release.sh app/build/outputs/apk/release/app-release.apk --expect-version 0.9.1
 ```
 
 校验项：versionCode/versionName 与 minSdk/targetSdk、ABI 纯净、证书指纹（固定断言发布密钥）、

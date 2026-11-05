@@ -1,6 +1,6 @@
 package cn.luoyi0914.ofmgateway
 
-import org.json.JSONObject
+import org.json.JSONArray
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -13,7 +13,9 @@ import java.net.URL
  *  3. 只提示，不自动下载安装——静默升级一个常驻服务不在本应用权限边界内。
  */
 object UpdateChecker {
-    private const val LATEST_URL = "https://api.github.com/repos/${IssueReporter.REPO}/releases/latest"
+    // 不能用 /releases/latest：本项目所有版本都按 pre-release 发布（观察窗后才手动提升），
+    // 而该端点只认正式版，会稳定返回 404，导致检查更新永远静默失败。
+    private const val RELEASES_URL = "https://api.github.com/repos/${IssueReporter.REPO}/releases?per_page=30"
     private const val PREFS = "ofm_update"
 
     data class Release(val version: String, val url: String, val preRelease: Boolean)
@@ -41,7 +43,7 @@ object UpdateChecker {
     }
 
     fun fetchLatest(timeoutMs: Int = 6000): Result<Release> = runCatching {
-        val conn = (URL(LATEST_URL).openConnection() as HttpURLConnection).apply {
+        val conn = (URL(RELEASES_URL).openConnection() as HttpURLConnection).apply {
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
             requestMethod = "GET"
@@ -53,17 +55,37 @@ object UpdateChecker {
                 throw IllegalStateException("HTTP ${conn.responseCode}")
             }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val json = JSONObject(body)
-            val tag = json.optString("tag_name").removePrefix("v")
-            if (tag.isBlank()) throw IllegalStateException("响应缺少 tag_name")
-            Release(
+            val releases = parseReleases(body)
+            if (releases.isEmpty()) throw IllegalStateException("响应里没有可识别的版本")
+            // 取版本号最大的那个，而不是「列表第一个」：列表可能混入 runtime-1 这类非应用制品。
+            releases.maxByOrNull { parseVersion(it.version).fold(0) { acc, n -> acc * 1000 + n } }
+                ?: error("unreachable")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * 纯函数：把 Releases 列表 JSON 切成版本条目。
+     *
+     * 只收「tag 以数字开头」的条目——`runtime-1` 是运行时制品，不是应用版本，
+     * 让它参与比较只会制造假提示。草稿一律丢弃。
+     */
+    fun parseReleases(body: String): List<Release> {
+        val arr = org.json.JSONArray(body)
+        val out = ArrayList<Release>(arr.length())
+        for (i in 0 until arr.length()) {
+            val json = arr.optJSONObject(i) ?: continue
+            if (json.optBoolean("draft", false)) continue
+            val tag = json.optString("tag_name").trim().removePrefix("v").removePrefix("V")
+            if (tag.isEmpty() || !tag.first().isDigit()) continue
+            out += Release(
                 version = tag,
                 url = json.optString("html_url").ifBlank { IssueReporter.appRepoUrl() },
                 preRelease = json.optBoolean("prerelease", false),
             )
-        } finally {
-            conn.disconnect()
         }
+        return out
     }
 
     /** 距上次检查是否已超过 [intervalMs]；用来避免每次进设置页都打一次 API。 */
