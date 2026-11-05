@@ -261,18 +261,31 @@ private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
                 )
             }
             Spacer(Modifier.height(14.dp))
+            // 四个按钮挤一行会把「一键体检」压成竖排单字（窄屏实测），
+            // 因此按「主操作 / 辅助操作」分两行，各按钮等宽并禁止换行。
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = { repository.startGateway() },
                     enabled = state.canStart,
-                ) { Text(if (state.busy) "启动中…" else "启动") }
+                    modifier = Modifier.weight(1f),
+                ) { Text(if (state.busy) "启动中…" else "启动", maxLines = 1) }
                 OutlinedButton(
                     onClick = { confirmStop = true },
                     enabled = state.running && !state.busy,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { Text("停止") }
-                OutlinedButton(onClick = { repository.probePort() }) { Text("检测端口") }
-                OutlinedButton(onClick = { showDiag = true }) { Text("一键体检") }
+                    modifier = Modifier.weight(1f),
+                ) { Text("停止", maxLines = 1) }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { repository.probePort() },
+                    modifier = Modifier.weight(1f),
+                ) { Text("检测端口", maxLines = 1) }
+                OutlinedButton(
+                    onClick = { showDiag = true },
+                    modifier = Modifier.weight(1f),
+                ) { Text("一键体检", maxLines = 1) }
             }
             if (state.probe != null) {
                 Spacer(Modifier.height(8.dp))
@@ -340,6 +353,7 @@ private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
+                    modifier = Modifier.weight(1f),
                     onClick = {
                         val url = state.loginUrl
                         when {
@@ -356,14 +370,15 @@ private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
                         }
                     },
                     enabled = state.running,
-                ) { Text("打开管理控制台") }
+                ) { Text("打开管理控制台", maxLines = 1) }
                 OutlinedButton(
+                    modifier = Modifier.weight(1f),
                     onClick = {
                         clipboard.setText(AnnotatedString(repository.accessList()))
                         notify("已复制接入信息")
                     },
                     enabled = state.running,
-                ) { Text("复制接入信息") }
+                ) { Text("复制接入信息", maxLines = 1) }
             }
             Spacer(Modifier.height(8.dp))
             Text(
@@ -616,14 +631,22 @@ private fun LogsScreen(state: GatewayUiState, repository: GatewayRepository) {
         }
 
         Spacer(Modifier.height(8.dp))
+        // 同首页：四个按钮挤一行在窄屏会被压成竖排单字，分两行等宽排。
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { repository.refresh() }) { Text("刷新") }
+            OutlinedButton(
+                onClick = { repository.refresh() },
+                modifier = Modifier.weight(1f),
+            ) { Text("刷新", maxLines = 1) }
             OutlinedButton(
                 onClick = {
                     clipboard.setText(AnnotatedString(repository.reportLog()))
                     notify("已复制日志（含脱敏）")
                 },
-            ) { Text("复制") }
+                modifier = Modifier.weight(1f),
+            ) { Text("复制", maxLines = 1) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = {
                     val text = repository.reportLog()
@@ -633,7 +656,8 @@ private fun LogsScreen(state: GatewayUiState, repository: GatewayRepository) {
                     }
                     context.startActivity(Intent.createChooser(intent, "分享日志"))
                 },
-            ) { Text("分享") }
+                modifier = Modifier.weight(1f),
+            ) { Text("分享", maxLines = 1) }
             OutlinedButton(
                 onClick = {
                     val url = IssueReporter.buildIssueUrl(
@@ -642,7 +666,8 @@ private fun LogsScreen(state: GatewayUiState, repository: GatewayRepository) {
                     )
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                 },
-            ) { Text("提交议题") }
+                modifier = Modifier.weight(1f),
+            ) { Text("提交议题", maxLines = 1) }
         }
         Spacer(Modifier.height(8.dp))
     }
