@@ -157,7 +157,7 @@ MainActivity (Compose UI)
 派生运行库（约 98MB 的 Node 与 Magpie）不入库。clean clone 的首次构建分两步：
 
 ```bash
-./scripts/fetch-runtime-bundle.sh    # 从固定 Release 拉取运行时制品并校验 SHA-256
+./scripts/fetch-runtime-bundle.sh    # 从固定 Release 拉取运行时制品并校验 SHA-256（落到仓库根 .cache）
 ./scripts/prepare-runtime-libs.sh    # 解包并成对改写 DT_NEEDED / DT_SONAME
 ```
 
@@ -177,7 +177,7 @@ MainActivity (Compose UI)
 ```
 
 校验项：versionCode/versionName 与 minSdk/targetSdk、ABI 纯净、证书指纹（固定断言发布密钥）、
-v2 + v3 签名、非 debuggable、体积预算、zip 16KB 对齐、14 个原生库齐全，
+v2 + v3 签名、非 debuggable、体积预算、zip 16KB 对齐、13 个运行库 + 1 个 JNI 库齐全，
 以及每个 `.so` 的 PT_LOAD 是否 16KB 对齐、`DT_NEEDED` 能否在包内解析（带版本名的 soname 会在这里被拦下）。
 
 版本号唯一来源是 `version.properties`（Gradle、CI、脚本都读它）；改动它之后打 `vX.Y.Z` tag，
