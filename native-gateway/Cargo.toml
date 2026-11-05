@@ -4,13 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 jni = "0.21"
 
+# `panic = "unwind"` is required: every JNI entry point wraps its body in
+# `catch_unwind`, and a panic must never unwind across the JNI boundary.
+# `strip` is intentionally off so panics keep a symbolised backtrace; the APK
+# symbol archive (`build/symbols/`) is produced by the Gradle build.
 [profile.release]
 opt-level = "z"
 lto = true
-strip = true
-panic = "abort"
+codegen-units = 1
+panic = "unwind"
+strip = "none"

@@ -11,7 +11,12 @@ object ServiceInfo {
     const val HOST = "127.0.0.1"
     const val DEFAULT_PORT = 15000
 
-    /** 优先读取 Node 实际写入的监听端口（settings.standalonePort），读不到回退 15000。 */
+    /**
+     * 端口唯一来源：优先读 Node 写下的 `standalonePort`。
+     *
+     * 这里刻意不缓存：用户可能在管理页改端口，首次启动前文件也还不存在。
+     * 每次取值都从磁盘读，调用方负责放到 IO 线程。
+     */
     fun apiPort(filesDir: String): Int = runCatching {
         val f = File(filesDir, "ofm-data/settings.json")
         if (!f.isFile) return@runCatching DEFAULT_PORT
@@ -23,25 +28,57 @@ object ServiceInfo {
     fun apiUrl(port: Int = DEFAULT_PORT): String = "http://$HOST:$port/v1"
 
     private val LOGIN_RE = Regex("""https?://[^\s"'<>]+#login=[A-Za-z0-9_\-]+""")
-    private val TOKEN_RE = Regex("""#login=[A-Za-z0-9_\-]+""")
 
-    /** 从日志里取最近一次「一次性登录」链接（该链接约 10 分钟有效）。 */
+    /** 一次性登录令牌的落盘位置（原生层写入，权限 0600）。 */
+    private fun bootstrapTokenFile(filesDir: String): File =
+        File(filesDir, "ofm-runtime/bootstrap.token")
+
+    /**
+     * 读取一次性登录令牌。
+     *
+     * 日志里存的是脱敏后的 `#login=***`（日志要能安全截图/贴议题），
+     * 所以真实令牌只能从原生层单独落盘的 0600 文件里取。
+     */
+    fun readBootstrapToken(filesDir: String): String? = runCatching {
+        val f = bootstrapTokenFile(filesDir)
+        if (!f.isFile) return@runCatching null
+        f.readText().trim().ifBlank { null }
+    }.getOrNull()
+
+    /** 令牌签发时间（用于提示「已过期，需重启网关换新链接」）。 */
+    fun bootstrapTokenAgeMs(filesDir: String): Long = runCatching {
+        val f = bootstrapTokenFile(filesDir)
+        if (!f.isFile) -1L else System.currentTimeMillis() - f.lastModified()
+    }.getOrDefault(-1L)
+
+    /**
+     * 组装管理控制台登录链接。
+     *
+     * 优先用脱敏前的令牌文件；兼容旧版本日志（旧日志里还留着完整链接）。
+     */
+    fun loginUrl(filesDir: String, port: Int, logText: String = ""): String? {
+        val token = readBootstrapToken(filesDir)
+        if (token != null) return "${baseUrl(port)}#login=$token"
+        return findLoginUrl(logText)
+    }
+
+    /** 从日志文本里提取登录链接（仅用于尚未脱敏的旧日志）。 */
     fun findLoginUrl(logText: String): String? =
         LOGIN_RE.findAll(logText).lastOrNull()?.value
 
     /** 抹掉一次性登录 token，避免复制/分享/提交到公开议题时泄露。 */
-    fun scrubToken(text: String): String = TOKEN_RE.replace(text, "#login=***")
+    fun scrubToken(text: String): String = TokenScrubber.scrub(text)
 
-    fun readApiKey(filesDir: String): String? = runCatching {
+    fun readApiKey(filesDir: String): String? =
+        readSettings(filesDir)?.optString("forwardKey")?.ifBlank { null }
+
+    fun readManagementKey(filesDir: String): String? =
+        readSettings(filesDir)?.optString("managementKey")?.ifBlank { null }
+
+    private fun readSettings(filesDir: String): JSONObject? = runCatching {
         val f = File(filesDir, "ofm-data/settings.json")
         if (!f.isFile) return@runCatching null
-        JSONObject(f.readText()).optString("forwardKey").ifBlank { null }
-    }.getOrNull()
-
-    fun readManagementKey(filesDir: String): String? = runCatching {
-        val f = File(filesDir, "ofm-data/settings.json")
-        if (!f.isFile) return@runCatching null
-        JSONObject(f.readText()).optString("managementKey").ifBlank { null }
+        JSONObject(f.readText())
     }.getOrNull()
 
     private val VERSION_RE = Regex("""our-free-model-standalone\s+([0-9][\w.\-]*)""")
@@ -63,15 +100,16 @@ object ServiceInfo {
             PackageManager.DONT_KILL_APP,
         )
     }
+}
 
-    fun statusLabel(raw: String): String = when (raw) {
-        "gateway running" -> "运行中"
-        "runtime ready" -> "就绪（未启动）"
-        "runtime app not installed" -> "运行时未安装"
-        "Node library missing" -> "缺少 Node 库"
-        "Magpie library missing" -> "缺少 Magpie 库"
-        "invalid runtime path" -> "运行时路径无效"
-        "Rust JNI library missing" -> "JNI 未加载"
-        else -> raw
-    }
+/**
+ * 一次性登录令牌的脱敏规则。
+ *
+ * 单独成类有两个目的：能在 JVM 单元测试里直接跑（不依赖 Android framework），
+ * 以及与原生层 `scrub_login_token` 保持同一套匹配口径。
+ */
+object TokenScrubber {
+    private val TOKEN_RE = Regex("""#login=[A-Za-z0-9_\-]+""")
+
+    fun scrub(text: String): String = TOKEN_RE.replace(text, "#login=***")
 }

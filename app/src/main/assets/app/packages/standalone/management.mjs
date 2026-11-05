@@ -131,9 +131,10 @@ export function createManagement({ stores, runtime, channels, eac, subscriptions
       privilegedSessions.delete(id)
     }
   }
+  // 注意：forwardKey（API Key）只是转发凭据，绝不能用来登录管理面。
+  // 否则把这个 key 交给任何客户端，等于把「读取/轮换 API Key、改设置、读 LAN Key」
+  // 一起交出去。管理面只认本地管理会话 cookie。
   const authenticated = req => {
-    const bearer = /^Bearer (.+)$/i.exec(String(req.headers.authorization ?? ''))?.[1]
-    if (matches(bearer, stores.settings.get().forwardKey)) return true
     pruneSessions()
     return sessions.has(cookie(req))
   }
@@ -212,7 +213,8 @@ export function createManagement({ stores, runtime, channels, eac, subscriptions
       const body = await readBody(req)
       const validBootstrap = bootstrap !== null && bootstrap.until > Date.now() && matches(body.bootstrapToken, bootstrap.token)
       const validManagementKey = matches(body.key, stores.settings.get().managementKey)
-      if (!validBootstrap && !validManagementKey && !matches(body.key, stores.settings.get().forwardKey)) throw fail(401, '登录链接已失效或登录令牌不正确')
+      // 只有一次性登录令牌或本机管理密钥可以登录；API Key 不行（它不是管理凭据）。
+      if (!validBootstrap && !validManagementKey) throw fail(401, '登录链接已失效或登录令牌不正确')
       pruneSessions()
       if (sessions.size >= 64) throw fail(429, '管理会话过多，请稍后重试')
       if (validBootstrap) bootstrap = null
@@ -233,6 +235,16 @@ export function createManagement({ stores, runtime, channels, eac, subscriptions
       || pathname === `${PREFIX}/subscriptions` || pathname.startsWith(`${PREFIX}/subscriptions/`)
       || pathname === `${PREFIX}/routing` || pathname.startsWith(`${PREFIX}/routing/`)
       || pathname === `${PREFIX}/engine` || pathname.startsWith(`${PREFIX}/engine/`)
+      // 凭据与会话相关：读取/轮换 API Key、LAN Key、改设置、开本机终端、确认免责声明、
+      // 改渠道配置。过去这些只要求 authenticated()，一个持有转发 API Key 的客户端就能
+      // 改设置（例如把上游指向自己的地址）或把 key 轮换掉。现在一律要求本地管理会话。
+      || pathname === `${PREFIX}/settings`
+      || pathname === `${PREFIX}/key` || pathname.startsWith(`${PREFIX}/key/`)
+      || pathname === `${PREFIX}/lan/key` || pathname.startsWith(`${PREFIX}/lan/key/`)
+      || pathname === `${PREFIX}/login/terminal`
+      || pathname === `${PREFIX}/disclaimer/ack`
+      || pathname === `${PREFIX}/channels/rpc`
+      || pathname === `${PREFIX}/models/refresh`
     // A sandboxed plugin page inside the workspace carries a per-run HMAC
     // capability in its own path; it has an opaque origin and cannot send this
     // console's session. The engine validates the capability and serves only

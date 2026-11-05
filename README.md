@@ -123,7 +123,7 @@ MainActivity (Compose UI)
 
 ### 工程结构
 
-- `app/`：Android UI（Material 3 Compose）、生命周期、`RuntimeInstaller`（assets 解包）、`NativeGateway`（JNI 边界）、`GatewayService`、`LogStore`、`ServiceInfo`、`ApiClient`、`ConsoleActivity`、`IssueReporter`。
+- `app/`：Android UI（Material 3 Compose，`MainActivity` 四页 + `ui/Theme.kt` 品牌色板）、`GatewayRepository`（单一状态流，磁盘/JNI 全在 IO 线程）、`GatewayStatus`（状态枚举与文案）、`RuntimeInstaller`（assets 解包）、`NativeGateway`（JNI 边界）、`GatewayService`（前台服务 + 看门狗）、`LogStore`、`ServiceInfo`、`ApiClient`、`ConsoleActivity`、`IssueReporter`、`Diagnostics`。
 - `native-gateway/`：Rust JNI crate，导出 `nativeRuntimeAvailable / nativeStatus / nativeStart / nativeStop / nativePid`。
 - `app/src/main/assets/app/`：上游服务源码，首启复制到私有目录。
 - `app/src/main/jniLibs/arm64-v8a/`：`libofm_gateway.so`（入库）；`libnode.so`、`libmagpie.so` 及其依赖库由脚本生成，**不入库**。
@@ -133,9 +133,10 @@ MainActivity (Compose UI)
 1. **原生库无版本名改写**：Android Gradle 只打包 `*.so`，而 Node 的 `DT_NEEDED` 引用带版本号的 soname。`scripts/prepare-runtime-libs.sh` 解析 ELF 动态段，**成对改写 `DT_NEEDED` 与 `DT_SONAME`** 为无版本名（原位覆盖，不改变文件布局），安装后直接从 `nativeLibraryDir` 加载，规避 Android 10+ 对可写目录 exec 的限制。
 2. **16 KB 页对齐**：所有 `LOAD` 段按 16 KB 对齐，满足 Android 15+ / targetSdk ≥ 35 的要求；Magpie 引擎用 NDK 29 + `-Wl,-z,max-page-size=16384` 重编。
 3. **运行时依赖注入**：`nativeStart` 在 spawn 前注入 `LD_LIBRARY_PATH`、`OFM_MAGPIE_BINARY`、`OFM_HOME`、`OFM_MANAGED_ROOT`、`HOME`、`TMPDIR`、`XDG_CACHE_HOME`；子进程以独立进程组启动（`process_group(0)`）。
-4. **陈旧锁判定**：启动前读取 `ofm-data/service.lock` 中的 pid，只有该 pid 仍存在于 `/proc` 才跳过启动，否则清锁后启动——**不**用「端口有监听」判定归属，避免误判被其他进程占用的端口。
-5. **停止语义**：先对整个进程组发 SIGTERM 让 Node 有机会释放锁，轮询至多 3 秒后再 SIGKILL；只有确实终止了自己的子进程时才清理锁文件。
-6. **凭据脱敏**：日志页的复制 / 分享 / 提交议题统一经 `ServiceInfo.scrubToken()`，一次性 `#login=` 链接替换为 `***`。
+4. **存活判定**：优先用子进程句柄；重启应用后没有句柄时，读 `ofm-data/service.lock` 里的 pid，要求 `/proc/<pid>/stat` 状态不是 `Z`/`X` **且** `/proc/<pid>/cmdline` 含 `cli.mjs`。僵尸进程不算活，端口有监听也不算活（端口可能被别的进程占用）。
+5. **停止语义**：先对整个进程组发 SIGTERM 让 Node 有机会释放锁，轮询至多 3 秒后再 SIGKILL；只有确实终止了自己的子进程时才清理锁文件。界面点停止只发指令，由服务线程收尾，避免与看门狗抢跑导致「停了又起」。
+6. **状态即契约**：JNI 返回稳定的 ASCII 状态键（`running` / `ready` / `runtime_missing` / …），Kotlin 侧 `GatewayStatus.fromKey` 映射成带颜色、文案与 `usable` 的语义状态；未知键降级为 `UNKNOWN` 而不是当作正常。
+7. **凭据脱敏**：日志页的复制 / 分享 / 提交议题统一经 `ServiceInfo.scrubToken()`（`TokenScrubber`，有单测），一次性 `#login=` 链接替换为 `***`；原生层写日志时也做同样脱敏，管理控制台退出清 cookie 与 WebStorage。
 
 ### 工具链
 
@@ -153,19 +154,35 @@ MainActivity (Compose UI)
 
 ### 从源码构建
 
-派生运行库不入库，clean clone 首次构建前需要先还原（依赖构建机上的受控运行时产物）：
+派生运行库（约 98MB 的 Node 与 Magpie）不入库。clean clone 的首次构建分两步：
 
 ```bash
-./scripts/prepare-runtime-libs.sh   # 提取 Node/Magpie 并改写 soname
+./scripts/fetch-runtime-bundle.sh    # 从固定 Release 拉取运行时制品并校验 SHA-256
+./scripts/prepare-runtime-libs.sh    # 解包并成对改写 DT_NEEDED / DT_SONAME
 ```
 
 随后：
 
 ```bash
-./gradlew --no-daemon assembleDebug     # 调试包
-./gradlew --no-daemon assembleRelease   # 正式包
+./gradlew --no-daemon :app:testDebugUnitTest   # 单元测试
+./gradlew --no-daemon assembleDebug            # 调试包
+./gradlew --no-daemon assembleRelease          # 正式包
 # 产物：app/build/outputs/apk/{debug,release}/app-{debug,release}.apk
 ```
+
+发版前必须过产物校验（读包本身，不看构建日志）：
+
+```bash
+./scripts/verify-release.sh app/build/outputs/apk/release/app-release.apk --expect-version 0.9.0
+```
+
+校验项：versionCode/versionName 与 minSdk/targetSdk、ABI 纯净、证书指纹（固定断言发布密钥）、
+v2 + v3 签名、非 debuggable、体积预算、zip 16KB 对齐、14 个原生库齐全，
+以及每个 `.so` 的 PT_LOAD 是否 16KB 对齐、`DT_NEEDED` 能否在包内解析（带版本名的 soname 会在这里被拦下）。
+
+版本号唯一来源是 `version.properties`（Gradle、CI、脚本都读它）；改动它之后打 `vX.Y.Z` tag，
+CI 会校验 tag 与 versionName 一致、versionCode 单调递增、`CHANGELOG.md` 有对应小节。
+流水线：`preflight`（无密钥）→ `build`（`environment: release`，需审批）→ `publish`（先发 pre-release）。
 
 - 签名：官方包使用专用 4096 位 RSA 密钥（alias `ofm`，有效期 100 年），密钥文件与口令**均不入库**；构建时从 `OFM_STORE_PASSWORD` / `OFM_KEY_ALIAS` / `OFM_KEY_PASSWORD` 环境变量或 `local.properties`（`ofm.storeFile` / `ofm.storePassword` / `ofm.keyAlias` / `ofm.keyPassword`）读取，缺任一口令时 release 构建直接失败，不会用默认值兜底。自行构建请生成自己的密钥。
 - `buildNative` / `syncNative` 自动 `cargo build` 并同步 `libofm_gateway.so`；`prepareRuntimeLibs` / `verifyRuntimeLibs` 在打包前强制生效，缺库会直接让构建失败，避免打出「无运行时」的包。
@@ -208,7 +225,7 @@ MainActivity (Compose UI)
 ## 开发与反馈
 
 - 应用内「提交议题到仓库」直接指向本仓库；设置页有到[模块版仓库](https://github.com/luoyi0914/ofm-gateway-magisk)与[上游服务](https://github.com/Ebony-Vinyl/dsh-our-free-model)的入口。
-- 当前为早期版本，版本号带 `-dev` 的构建属测试通道。
+- 变更记录见 [CHANGELOG.md](CHANGELOG.md)。版本号带 `-dev` 的构建属测试通道。
 
 ## 许可
 

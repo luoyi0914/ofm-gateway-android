@@ -1,0 +1,185 @@
+name: release
+
+# 发版流水线：preflight（无密钥）→ build（有密钥）→ publish（需人工提升）。
+# 关键原则：校验用产物本身，不看构建日志；密钥只在 build/publish 两个 job 里出现。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要重建的 tag（例如 v0.9.0）"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight (no secrets)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      versionCode: ${{ steps.v.outputs.versionCode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag and version
+        id: v
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          PROPS_CODE=$(sed -n 's/^versionCode=//p' version.properties)
+          PROPS_NAME=$(sed -n 's/^versionName=//p' version.properties)
+          test -n "$PROPS_CODE" && test -n "$PROPS_NAME" || { echo "version.properties 缺字段"; exit 1; }
+          # tag 与 version.properties 必须一致，否则产物版本号会说谎。
+          test "$TAG" = "v$PROPS_NAME" || { echo "tag $TAG 与 versionName $PROPS_NAME 不一致"; exit 1; }
+          echo "version=$PROPS_NAME" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$PROPS_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Assert version is monotonic
+        run: |
+          set -euo pipefail
+          PREV=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${{ github.event.inputs.tag || github.ref_name }}$" | head -1 || true)
+          if [ -z "$PREV" ]; then echo "首个版本，跳过"; exit 0; fi
+          PREV_CODE=$(git show "$PREV:version.properties" | sed -n 's/^versionCode=//p')
+          echo "上一版 $PREV versionCode=$PREV_CODE，本版 ${{ steps.v.outputs.versionCode }}"
+          test "${{ steps.v.outputs.versionCode }}" -gt "$PREV_CODE" || { echo "versionCode 未递增"; exit 1; }
+
+      - name: Assert CHANGELOG has a section for this version
+        run: |
+          set -euo pipefail
+          test -f CHANGELOG.md || { echo "缺少 CHANGELOG.md"; exit 1; }
+          grep -q "^## \[${{ steps.v.outputs.version }}\]\|^## ${{ steps.v.outputs.version }}" CHANGELOG.md \
+            || { echo "CHANGELOG.md 没有 ${{ steps.v.outputs.version }} 的条目"; exit 1; }
+
+  build:
+    name: build signed APK
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: release          # 需在仓库设置里配置审批人，避免误发
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK (pinned build-tools + NDK)
+        run: |
+          set -euo pipefail
+          # 版本钉死：CI 不允许「碰巧装了某个版本」。
+          SDK_ROOT="$HOME/android-sdk"
+          CMDLINE_VERSION=13114758
+          BUILD_TOOLS=37.0.0
+          NDK=29.0.14206865
+          PLATFORM=android-37
+          mkdir -p "$SDK_ROOT/cmdline-tools"
+          curl -fsSL -o /tmp/cmdline.zip "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_VERSION}_latest.zip"
+          unzip -q /tmp/cmdline.zip -d "$SDK_ROOT/cmdline-tools"
+          mv "$SDK_ROOT/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;${PLATFORM}" "build-tools;${BUILD_TOOLS}" "ndk;${NDK}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/${NDK}" >> "$GITHUB_ENV"
+          echo "BUILD_TOOLS=$SDK_ROOT/build-tools/${BUILD_TOOLS}" >> "$GITHUB_ENV"
+
+      - name: Install Rust target
+        run: |
+          rustup target add aarch64-linux-android
+          rustc --version && cargo --version
+
+      - name: Materialize runtime bundle
+        run: |
+          set -euo pipefail
+          # 运行时（约 100MB）不入库：从固定 Release 拉取并用 SHA256SUMS 校验。
+          # 制品地址与校验和都写在 repo 里，避免 CI 依赖「某人本地有文件」。
+          bash scripts/fetch-runtime-bundle.sh
+
+      - name: Write signing material
+        env:
+          KEYSTORE_BASE64: ${{ secrets.OFM_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.OFM_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.OFM_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.OFM_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "$KEYSTORE_BASE64" ] || { echo "缺少 OFM_KEYSTORE_BASE64"; exit 1; }
+          mkdir -p keystore
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore/ofm-release.jks
+          {
+            echo "ofm.storeFile=keystore/ofm-release.jks"
+            echo "ofm.storePassword=$STORE_PASSWORD"
+            echo "ofm.keyAlias=$KEY_ALIAS"
+            echo "ofm.keyPassword=$KEY_PASSWORD"
+            echo "sdk.dir=$ANDROID_HOME"
+            echo "ndk.dir=$ANDROID_NDK_HOME"
+          } > local.properties
+          chmod 600 local.properties
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest
+
+      - name: Build release
+        run: ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Verify release artifact
+        run: bash scripts/verify-release.sh app/build/outputs/apk/release/app-release.apk --expect-version "${{ needs.preflight.outputs.version }}"
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk \
+             "out/OFM-Gateway-${{ needs.preflight.outputs.version }}-arm64-v8a.apk"
+          cp app/build/outputs/mapping/release/mapping.txt "out/mapping-${{ needs.preflight.outputs.version }}.txt"
+          ( cd out && sha256sum ./*.apk > SHA256SUMS )
+          {
+            echo "version=${{ needs.preflight.outputs.version }}"
+            echo "versionCode=${{ needs.preflight.outputs.versionCode }}"
+            echo "commit=${{ github.sha }}"
+            echo "built_at=$(date -u +%FT%TZ)"
+            echo "signer_sha256=42f845230670529f6c06a606118e14e312d3f96c710b060996526cec54e6a236"
+          } > out/BUILD-INFO.txt
+          cat out/SHA256SUMS out/BUILD-INFO.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: out/
+
+  publish:
+    name: publish pre-release
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-apk
+          path: out
+
+      - name: Publish as pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # 起步一律发 pre-release：48 小时观察窗后由人手动改成 latest。
+          gh release create "$TAG" out/* \
+            --title "OFM Gateway ${{ needs.preflight.outputs.version }}" \
+            --notes-file release-notes.md \
+            --prerelease \
+            --verify-tag
