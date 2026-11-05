@@ -22,9 +22,7 @@
 下载 `OFM-Gateway-0.9.0-arm64-v8a.apk` 直接安装（覆盖安装保留配置与密钥）。仅支持 arm64 设备。
 
 `SHA256`：
-```
-84ef8e730b170fd0cb44f437b3ed46ba4712296c89bd1477764078c215ce6e0a  OFM-Gateway-0.9.0-arm64-v8a-release.apk
-```
+见随包的 `SHA256SUMS`（与 `dist/` 中的文件同源生成，不在此处硬编码，避免重出包后过期）。
 
 ### 已知限制
 

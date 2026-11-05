@@ -2,6 +2,8 @@ package cn.luoyi0914.ofmgateway
 
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -58,6 +60,8 @@ class GatewayRepository(private val context: Context) {
     val state: StateFlow<GatewayUiState> = _state.asStateFlow()
 
     private var pollJob: Job? = null
+    // 轮询与手动刷新会同时触发；串行化避免两次轮询各自读一遍日志与锁文件。
+    private val refreshLock = Mutex()
 
     fun start() {
         if (pollJob?.isActive == true) return
@@ -107,35 +111,39 @@ class GatewayRepository(private val context: Context) {
     /** 每 3 秒刷新运行时状态、日志与凭据。 */
     fun refresh() = scope.launch { refreshRuntime() }
 
-    private suspend fun refreshRuntime() = withContext(Dispatchers.IO) {
-        val install = RuntimeInstaller.ensure(context)
-        val status = if (install.isFailure) GatewayStatus.RUNTIME_MISSING
-        else NativeGateway.status(filesDirPath, nativeDir)
-        val pid = if (install.isSuccess) runCatching { NativeGateway.pid() }.getOrDefault(-1) else -1
-        val port = ServiceInfo.apiPort(filesDirPath)
-        val days = LogStore.listDays(filesDirPath)
-        val current = _state.value
-        val day = current.selectedDay?.takeIf { it in days } ?: days.firstOrNull()
-        val logText = day?.let { LogStore.readDay(filesDirPath, it) } ?: ""
-        // 日志里的链接已被脱敏成 #login=***，真实令牌从原生层 0600 文件读。
-        val loginUrl = ServiceInfo.loginUrl(filesDirPath, port, day?.let { LogStore.readDay(filesDirPath, it, 20_000) } ?: "")
-        val version = day?.let { ServiceInfo.findVersion(LogStore.readDay(filesDirPath, it, 20_000)) }
-        _state.update {
-            it.copy(
-                runtimeInstalled = install.isSuccess,
-                installError = install.exceptionOrNull()?.message,
-                status = status,
-                pid = pid,
-                port = port,
-                days = days,
-                selectedDay = day,
-                logText = logText,
-                loginUrl = loginUrl,
-                bootstrapAgeMs = ServiceInfo.bootstrapTokenAgeMs(filesDirPath),
-                version = version ?: it.version,
-                apiKey = ServiceInfo.readApiKey(filesDirPath) ?: it.apiKey,
-                managementKey = ServiceInfo.readManagementKey(filesDirPath) ?: it.managementKey,
-            )
+    private suspend fun refreshRuntime() = refreshLock.withLock {
+        withContext(Dispatchers.IO) {
+            val install = RuntimeInstaller.ensure(context)
+            val status = if (install.isFailure) GatewayStatus.RUNTIME_MISSING
+            else NativeGateway.status(filesDirPath, nativeDir)
+            val pid = if (install.isSuccess) runCatching { NativeGateway.pid() }.getOrDefault(-1) else -1
+            val port = ServiceInfo.apiPort(filesDirPath)
+            val days = LogStore.listDays(filesDirPath)
+            val current = _state.value
+            val day = current.selectedDay?.takeIf { it in days } ?: days.firstOrNull()
+            val logText = day?.let { LogStore.readDay(filesDirPath, it) } ?: ""
+            // 版本与登录链接只需要日志尾部：一次读取，避免同一轮里把文件读两遍。
+            val tail = day?.let { LogStore.readDay(filesDirPath, it, 20_000) } ?: ""
+            // 日志里的链接已被脱敏成 #login=***，真实令牌从原生层 0600 文件读。
+            val loginUrl = ServiceInfo.loginUrl(filesDirPath, port, tail)
+            val version = ServiceInfo.findVersion(tail)
+            _state.update {
+                it.copy(
+                    runtimeInstalled = install.isSuccess,
+                    installError = install.exceptionOrNull()?.message,
+                    status = status,
+                    pid = pid,
+                    port = port,
+                    days = days,
+                    selectedDay = day,
+                    logText = logText,
+                    loginUrl = loginUrl,
+                    bootstrapAgeMs = ServiceInfo.bootstrapTokenAgeMs(filesDirPath),
+                    version = version ?: it.version,
+                    apiKey = ServiceInfo.readApiKey(filesDirPath) ?: it.apiKey,
+                    managementKey = ServiceInfo.readManagementKey(filesDirPath) ?: it.managementKey,
+                )
+            }
         }
     }
 
