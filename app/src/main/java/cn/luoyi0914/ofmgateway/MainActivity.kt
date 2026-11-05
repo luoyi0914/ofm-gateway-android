@@ -128,7 +128,7 @@ private fun AppShell() {
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (current) {
                 Tab.HOME -> HomeScreen(state, repository)
-                Tab.MODELS -> ModelsScreen(state)
+                Tab.MODELS -> ModelsScreen(state, repository)
                 Tab.LOGS -> LogsScreen(state, repository)
                 Tab.SETTINGS -> SettingsScreen(state, repository)
             }
@@ -297,12 +297,45 @@ private fun HomeScreen(state: GatewayUiState, repository: GatewayRepository) {
                 ) { Text("打开管理控制台") }
                 OutlinedButton(
                     onClick = {
-                        val text = ServiceInfo.apiUrl(state.port) + "\n" + (state.apiKey ?: "")
-                        clipboard.setText(AnnotatedString(text))
+                        clipboard.setText(AnnotatedString(repository.accessList()))
                         notify("已复制接入信息")
                     },
                     enabled = state.running,
                 ) { Text("复制接入信息") }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "接入第三方客户端的配置片段",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AccessSnippet.Client.entries.forEach { client ->
+                    OutlinedButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(repository.snippet(client)))
+                            notify("已复制 ${client.label} 接入片段")
+                        },
+                        enabled = state.running,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(client.label) }
+                }
+            }
+            if (state.preferredModel == null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "还没选推荐模型：去「模型」页点一次「选它」，片段里就会带上模型名。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "推荐模型：${state.preferredModel}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (!state.running) {
                 Spacer(Modifier.height(6.dp))
@@ -356,7 +389,10 @@ private fun CredentialRow(label: String, value: String?, onCopy: (String) -> Uni
 /* --------------------------- 模型列表 --------------------------- */
 
 @Composable
-private fun ModelsScreen(state: GatewayUiState) {
+private fun ModelsScreen(state: GatewayUiState, repository: GatewayRepository) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val notify: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -436,12 +472,25 @@ private fun ModelsScreen(state: GatewayUiState) {
                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         ),
                     ) {
-                        SelectionContainer {
-                            Text(
-                                id,
-                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            )
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SelectionContainer {
+                                Text(
+                                    id,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            TextButton(onClick = {
+                                clipboard.setText(AnnotatedString(id))
+                                notify("已复制模型 ID")
+                            }) { Text("复制") }
+                            val picked = state.preferredModel == id
+                            TextButton(onClick = { repository.setPreferredModel(if (picked) null else id) }) {
+                                Text(if (picked) "已选" else "选它")
+                            }
                         }
                     }
                 }

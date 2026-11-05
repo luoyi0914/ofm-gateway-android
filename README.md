@@ -56,6 +56,13 @@ OFM（Our Free Model）上游自带一个本地网关：在本机起一个兼容
 
 网关提供 `GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses` 等上游已实现的接口，具体可用模型取决于上游的渠道与账号状态——「模型列表」页就是从 `/v1/models` 实时拉取的结果。
 
+选好模型后，在「模型列表」页点一次「选它」存为推荐模型，首页「凭据」卡就多出两档复制：
+
+- **复制接入信息**：三行清单（Base URL / API Key / 模型名），照着填任意 OpenAI 兼容客户端。
+- **ChatBox / NextChat 片段**：含该客户端的填写位置提示，以及「客户端必须装在同一台手机上」的说明。
+
+片段不内置客户端截图——那些会随客户端改版过期。未选模型时片段会写明「去模型页选一个」，不会编一个不存在的模型名。
+
 > 实际监听端口以服务写入的 `settings.json` 中的 `standalonePort` 为准，应用界面会动态读取，不写死。
 
 ### 4. 停止
@@ -125,7 +132,7 @@ MainActivity (Compose UI)
 
 ### 工程结构
 
-- `app/`：Android UI（Material 3 Compose，`MainActivity` 四页 + `ui/Theme.kt` 品牌色板）、`GatewayRepository`（单一状态流，磁盘/JNI 全在 IO 线程）、`GatewayStatus`（状态枚举与文案）、`RuntimeInstaller`（assets 解包）、`NativeGateway`（JNI 边界）、`GatewayService`（前台服务 + 看门狗）、`LogStore`、`ServiceInfo`、`ApiClient`、`ConsoleActivity`、`IssueReporter`、`Diagnostics`。
+- `app/`：Android UI（Material 3 Compose，`MainActivity` 四页 + `ui/Theme.kt` 品牌色板）、`GatewayRepository`（单一状态流，磁盘/JNI 全在 IO 线程）、`GatewayStatus`（状态枚举与文案）、`AccessSnippet`（ChatBox / NextChat 接入片段拼装）、`UpdateChecker`（检查更新）、`RuntimeInstaller`（assets 解包）、`NativeGateway`（JNI 边界）、`GatewayService`（前台服务 + 看门狗）、`LogStore`、`ServiceInfo`、`ApiClient`、`ConsoleActivity`、`IssueReporter`、`Diagnostics`。
 - `native-gateway/`：Rust JNI crate，导出 `nativeRuntimeAvailable / nativeStatus / nativeStart / nativeStop / nativePid`。
 - `app/src/main/assets/app/`：上游服务源码，首启复制到私有目录。
 - `app/src/main/jniLibs/arm64-v8a/`：`libofm_gateway.so`（入库）；`libnode.so`、`libmagpie.so` 及其依赖库由脚本生成，**不入库**。

@@ -40,6 +40,8 @@ data class GatewayUiState(
     val busy: Boolean = false,
     /** 新版本提示；null 表示已是最新或尚未检查。 */
     val newerRelease: UpdateChecker.Release? = null,
+    /** 用户选定的推荐模型：用于接入片段与「复制接入信息」，不影响网关本身。 */
+    val preferredModel: String? = null,
 ) {
     val running: Boolean get() = status.running
     val canStart: Boolean get() = runtimeInstalled && !running && !busy
@@ -58,8 +60,14 @@ class GatewayRepository(private val context: Context) {
     private val filesDirPath: String = context.filesDir.absolutePath
     private val nativeDir: String = context.applicationInfo.nativeLibraryDir
 
+    private val prefs = context.getSharedPreferences("ofm_ui", Context.MODE_PRIVATE)
+
     private val _state = MutableStateFlow(GatewayUiState())
     val state: StateFlow<GatewayUiState> = _state.asStateFlow()
+
+    private companion object {
+        const val KEY_MODEL = "preferred_model"
+    }
 
     private var pollJob: Job? = null
     // 轮询与手动刷新会同时触发；串行化避免两次轮询各自读一遍日志与锁文件。
@@ -96,6 +104,7 @@ class GatewayRepository(private val context: Context) {
             context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
         } else true
+        val preferredModel = prefs.getString(KEY_MODEL, null)?.takeIf { it.isNotBlank() }
         val optimizing = runCatching {
             val pm = context.getSystemService(android.os.PowerManager::class.java)
             pm?.isIgnoringBatteryOptimizations(context.packageName) != true
@@ -106,6 +115,7 @@ class GatewayRepository(private val context: Context) {
                 bootAuto = bootAuto,
                 notificationGranted = granted,
                 batteryOptimized = optimizing,
+                preferredModel = preferredModel,
             )
         }
     }
@@ -199,6 +209,22 @@ class GatewayRepository(private val context: Context) {
     fun reportLog(): String = LogStore.reportLog(filesDirPath, _state.value.selectedDay)
 
     fun diagnostic(): String = Diagnostics.build(context, _state.value)
+
+    /** 选/取消推荐模型；只影响接入片段，网关不关心这个值。 */
+    fun setPreferredModel(model: String?) {
+        prefs.edit().apply { if (model.isNullOrBlank()) remove(KEY_MODEL) else putString(KEY_MODEL, model) }.apply()
+        _state.update { it.copy(preferredModel = model?.takeIf { m -> m.isNotBlank() }) }
+    }
+
+    /** 生成某个客户端形态的接入片段；纯本地拼装，不发请求。 */
+    fun snippet(client: AccessSnippet.Client): String = with(_state.value) {
+        AccessSnippet.build(client, ServiceInfo.baseUrl(port), apiKey.orEmpty(), preferredModel)
+    }
+
+    /** 三项清单（地址/密钥/模型），复制到剪贴板用。 */
+    fun accessList(): String = with(_state.value) {
+        AccessSnippet.compact(ServiceInfo.baseUrl(port), apiKey.orEmpty(), preferredModel)
+    }
 
     /**
      * 检查更新（进设置页时调用，12 小时内不重复打 API）。
