@@ -28,6 +28,9 @@ jobs:
       versionCode: ${{ steps.v.outputs.versionCode }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 必须取全量 tag：版本单调性检查要 git tag 列表和上一版 version.properties。
+          fetch-depth: 0
 
       - name: Resolve tag and version
         id: v
@@ -82,12 +85,15 @@ jobs:
           CMDLINE_VERSION=13114758
           BUILD_TOOLS=37.0.0
           NDK=29.0.14206865
-          PLATFORM=android-37
+          # 注意包名：SDK 里叫 android-37.0，写 android-37 会「找不到包」。
+          PLATFORM=android-37.0
           mkdir -p "$SDK_ROOT/cmdline-tools"
           curl -fsSL -o /tmp/cmdline.zip "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_VERSION}_latest.zip"
           unzip -q /tmp/cmdline.zip -d "$SDK_ROOT/cmdline-tools"
           mv "$SDK_ROOT/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
-          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          # `yes | sdkmanager --licenses` 在 pipefail 下会因 yes 收到 SIGPIPE 返回 1，把整个 job 带崩。
+          # 正确写法：忽略 yes 的退出码，只让 sdkmanager 的退出码决定成败。
+          ( yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null ) || true
           "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "platforms;${PLATFORM}" "build-tools;${BUILD_TOOLS}" "ndk;${NDK}"
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
@@ -166,6 +172,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 需要仓库里的 release-notes.md 作为发布说明，所以 publish 也要 checkout。
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: release-apk
@@ -178,8 +187,14 @@ jobs:
         run: |
           set -euo pipefail
           # 起步一律发 pre-release：48 小时观察窗后由人手动改成 latest。
-          gh release create "$TAG" out/* \
-            --title "OFM Gateway ${{ needs.preflight.outputs.version }}" \
-            --notes-file release-notes.md \
-            --prerelease \
-            --verify-tag
+          # Release 可能已由人工先建（例如手动补传资产），此时改为上传资产而不是报错退出。
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG 已存在，改为上传/覆盖资产"
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* \
+              --title "OFM Gateway ${{ needs.preflight.outputs.version }}" \
+              --notes-file release-notes.md \
+              --prerelease \
+              --verify-tag
+          fi
