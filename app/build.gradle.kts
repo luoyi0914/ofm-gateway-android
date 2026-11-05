@@ -119,6 +119,8 @@ val buildNative by tasks.registering(Exec::class) {
         "--manifest-path", cargoManifest.absolutePath,
         "--target", "aarch64-linux-android",
         "--release",
+        // 锁文件必须参与构建：否则 CI 与本地可能悄悄解析出不同的依赖版本。
+        "--locked",
     )
     inputs.files(fileTree("${rootProject.projectDir}/native-gateway/src"))
     inputs.file(cargoManifest)

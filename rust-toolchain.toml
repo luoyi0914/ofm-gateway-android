@@ -1,0 +1,7 @@
+# 工具链钉死：JNI 库是随 APK 分发的二进制，编译器版本漂移会改变产物哈希与 panic 行为，
+# 而 README 里写「需要 1.99.1」这种口头约定在 CI 上不成立。rustup 会按此处自动切换。
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["aarch64-linux-android"]
+profile = "minimal"

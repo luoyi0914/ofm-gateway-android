@@ -1,0 +1,17 @@
+<!--
+  通知栏小图标：必须是「白色不透明形状 + 透明背景」的单色图。
+  用小图标比用 android.R.drawable.stat_sys_upload_done 好：后者长相与「上传」相关，
+  用户在通知栏看到会误以为是系统上传任务，而不是本机网关在运行。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <!-- 圆环 -->
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M12,3a9,9 0 1,1 0,18a9,9 0 1,1 0,-18 M12,6a6,6 0 1,0 0,12a6,6 0 1,0 0,-12"
+        android:fillType="evenOdd"/>
+    <!-- 指针 -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M12,12L17,7"/>
+</vector>

@@ -22,6 +22,17 @@ MAGPIE="$CACHE/magpie-android-arm64"
 [ -f "$NODE_TGZ" ] || { echo "missing $NODE_TGZ" >&2; exit 1; }
 [ -f "$MAGPIE" ]   || { echo "missing $MAGPIE" >&2; exit 1; }
 
+# 只查存在性会让「残留的旧运行库」静默混进包里，打出看起来成功、真机一启动就崩的包。
+# 因此输入必须按哈希固定：这两个值与 scripts/fetch-runtime-bundle.sh 的期望值同源。
+EXPECT_NODE_SHA256=230397a17157304710e7d897463f685cb1ea866b507113d6e451578e4ed3e4bc
+EXPECT_MAGPIE_SHA256=864e77fe5a0af08eed0bc8e183993423369d025b15d300d575332a0217d7f29f
+if [ "${OFM_SKIP_RUNTIME_SHA:-0}" != "1" ]; then
+  echo "$EXPECT_NODE_SHA256  $NODE_TGZ"   | sha256sum -c --status - || {
+    echo "node 运行时哈希不符：$NODE_TGZ" >&2; exit 1; }
+  echo "$EXPECT_MAGPIE_SHA256  $MAGPIE"   | sha256sum -c --status - || {
+    echo "Magpie 哈希不符：$MAGPIE（需 NDK 29 的 16KB 对齐构建）" >&2; exit 1; }
+fi
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 tar -xzf "$NODE_TGZ" -C "$TMP"

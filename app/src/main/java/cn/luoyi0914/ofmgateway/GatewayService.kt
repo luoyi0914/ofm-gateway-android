@@ -145,7 +145,8 @@ class GatewayService : Service() {
         )
         val text = if (status == GatewayStatus.RUNNING) "127.0.0.1:$port · 运行中" else status.label
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            // 自带的单色小图标：系统「上传完成」图标会让用户误以为是别的任务。
+            .setSmallIcon(cn.luoyi0914.ofmgateway.R.drawable.ic_notification)
             .setContentTitle("OFM 网关")
             .setContentText(text)
             .setContentIntent(contentIntent)
