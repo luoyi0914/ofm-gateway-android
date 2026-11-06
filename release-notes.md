@@ -1,43 +1,55 @@
-## OFM Gateway 0.9.4
+## OFM Gateway 0.9.5
 
 无 root 的本机 OpenAI 兼容网关：APK 自带 Node 运行时与 Magpie 引擎，服务只监听 `127.0.0.1`，数据不出设备。
 
-这一版修好了「模型工作台起不来」。
+这一版修好了「装社区插件必定失败」。
 
-### 这次是真的修了
+### 问题在哪
 
-上一版（0.9.3）把失败原因打出来之后，真机日志直接给出了答案：
+在「发现」页装 `@magpie-community/*` 插件时，会看到两条报错：
 
 ```
-Magpie engine start failed: Magpie engine could not start (at lease; EACCES;
-permission denied, link '.../magpie/owner.lock.xxxx.tmp' -> '.../magpie/owner.lock')
+bun add @magpie-community/opencode-mimo-auth@latest: fork/exec
+/data/user/0/cn.luoyi0914.ofmgateway/files/ofm-data/magpie/cache/magpie/bun/1.4.2/magpie-bun:
+permission denied
+(and from the community repo's dist branch: … read: connection reset by peer)
 ```
 
-引擎启动时要在数据目录里建一个 `owner.lock` 租约文件，用的方式是**硬链接**
-（先写临时文件，再 `link()` 到目标名，这样要么成功要么不覆盖别人的记录）。
-问题是部分 Android 设备的 App 存储卷不支持硬链接，`link()` 直接返回 `EACCES`，
-于是每次启动都卡在同一处——和引擎二进制、网络、权限都没有关系。
+第一条是主因，第二条是被牵连的。Magpie 引擎执行 `bun add` 前会把一份 Bun
+下载进自己的缓存目录（`ofm-data/magpie/cache/magpie/bun/<版本>/magpie-bun`），再直接
+`fork/exec` 它。Android 从 10 起就禁止执行应用私有目录里落盘的文件（W^X），
+所以这一步**每次**都会 `permission denied`。引擎把这次失败当成「装包失败」，
+于是又去回退社区仓库的 dist 分支；而那条回退只是绕过 npm 直接取 tarball，
+最终仍要 bun 可执行，于是第二次也失败，两条错误拼在一起显示。
 
 ### 改了什么
 
-- **不再依赖硬链接**：`link()` 遇到「该卷不支持硬链接」这类错误码（`EPERM` /
-  `EACCES` / `ENOTSUP` 等）时，回退到 `O_EXCL` 独占创建。两者保证一致——要么新建
-  成功，要么失败，绝不覆盖已有租约——互斥语义不变；支持硬链接的文件系统仍走原路径。
-- **修掉上一版诊断代码的一个自伤 bug**：采集 stderr 与退出码的变量原先声明在
-  `boot()` 内部，而报告函数在工厂作用域，重试时会抛 `spawnFailed is not defined`
-  把真实原因盖住。现在提到工厂作用域并在每次 spawn 前重置。
+- **Bun 随 APK 分发**：以 `libbun.so` 的形式打进 `nativeLibraryDir`（arm64，
+  约 83 MB）。那个目录是只读、可执行的，Android 本来就要求从那里 exec 原生库，
+  所以不存在上面的限制。启动 Node 网关时用 `OFM_MAGPIE_BUN` 把路径传给引擎，
+  引擎读到 `MAGPIE_BUN` 就直接用它，不再下载、不再往私有目录落盘。
+- **`libbun.so` 不能被 strip**：AGP 默认对 `jniLibs` 里的 `.so` 跑
+  `stripReleaseDebugSymbols`，第一次构建时它把 Bun 的符号表裁掉了
+  （86,800,440 → 86,739,592 字节），我们校验过的二进制和用户装到的就不是同一份。
+  已用 `keepDebugSymbols` 单独豁免，并在 `verify-release.sh` 里加了字节级
+  sha256 断言——被改写就拦住不发版。
+- **「国内镜像」默认打开**：新装默认写 `chinaMirror: true`，让社区仓库 dist
+  分支走 jsDelivr、npm 走 npmmirror。用户显式关过的保持关闭。
 
 ### 你应该感受到的变化
 
-- 之前「模型工作台」一直起不来、点重试也没用的设备，这一版应该能正常启动。
-- 万一还是不行，日志页照旧会有 `Magpie engine start failed: …`，把那行贴到 issue 即可，它不含密钥。
+- 装 `@magpie-community/*` 插件不再报 `permission denied`，也不需要先自己
+  准备 Bun。
+- 大陆网络下插件列表与 npm 源明显更容易通。
 
-### 安装
+### 代价
 
-下载 `OFM-Gateway-0.9.4-arm64-v8a.apk` 直接覆盖安装（保留配置、密钥与日志）。仅支持 arm64 设备。
-
-`SHA256` 见随包的 `SHA256SUMS`。
+APK 从 60.1 MB 涨到 93.7 MB。Bun 二进制本身 83 MB（压缩后约 33 MB），
+这是「随包分发」的固有体积；换来的是首次装插件不再依赖联网下载 + 私有目录执行。
 
 ### 已知限制
 
 - 仅 `arm64-v8a`；未开放局域网访问；Shizuku/root 后端仍是占位；极端省电策略下的长时保活未实测。
+- 从 0.9.4 升级后**首次启动会重新解包运行时**（解包标记绑 `versionCode`），
+  耗时比平时长几秒，属正常。
+

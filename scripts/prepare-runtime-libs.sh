@@ -11,6 +11,7 @@
 # 依赖输入（仓库根 .cache，均可从基线 Release 或构建脚本再生成）：
 #   .cache/node-runtime-arm64.tgz   （Node 运行时 + 依赖库）
 #   .cache/magpie-android-arm64     （经 NDK 29 16KB 重编的 Magpie 引擎）
+#   .cache/bun-android-arm64        （Bun 可执行文件，供 Magpie 装 @magpie-community 插件）
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"       # android-app/
 REPO="$(cd "$HERE/.." && pwd)"                                 # repo root
@@ -18,19 +19,26 @@ CACHE="$REPO/.cache"
 JNI="$HERE/app/src/main/jniLibs/arm64-v8a"
 NODE_TGZ="$CACHE/node-runtime-arm64.tgz"
 MAGPIE="$CACHE/magpie-android-arm64"
+# Bun 必须以「可执行文件」进包：Magpie 会 fork/exec 它，644 会 EACCES。
+# 名字取 libbun.so 是为了落进 nativeLibraryDir —— 那是应用沙箱里唯一允许 exec 的地方。
+BUN="$CACHE/bun-android-arm64"
 
 [ -f "$NODE_TGZ" ] || { echo "missing $NODE_TGZ" >&2; exit 1; }
 [ -f "$MAGPIE" ]   || { echo "missing $MAGPIE" >&2; exit 1; }
+[ -f "$BUN" ]      || { echo "missing $BUN（先运行 android-app/scripts/fetch-runtime-bundle.sh）" >&2; exit 1; }
 
 # 只查存在性会让「残留的旧运行库」静默混进包里，打出看起来成功、真机一启动就崩的包。
-# 因此输入必须按哈希固定：这两个值与 scripts/fetch-runtime-bundle.sh 的期望值同源。
+# 因此输入必须按哈希固定：这三个值与 scripts/fetch-runtime-bundle.sh 的期望值同源。
 EXPECT_NODE_SHA256=230397a17157304710e7d897463f685cb1ea866b507113d6e451578e4ed3e4bc
 EXPECT_MAGPIE_SHA256=864e77fe5a0af08eed0bc8e183993423369d025b15d300d575332a0217d7f29f
+EXPECT_BUN_SHA256=f2970336bfccf36e4e8a408b25c627122f210e941672f184198c31f4dbd377a0
 if [ "${OFM_SKIP_RUNTIME_SHA:-0}" != "1" ]; then
   echo "$EXPECT_NODE_SHA256  $NODE_TGZ"   | sha256sum -c --status - || {
     echo "node 运行时哈希不符：$NODE_TGZ" >&2; exit 1; }
   echo "$EXPECT_MAGPIE_SHA256  $MAGPIE"   | sha256sum -c --status - || {
     echo "Magpie 哈希不符：$MAGPIE（需 NDK 29 的 16KB 对齐构建）" >&2; exit 1; }
+  echo "$EXPECT_BUN_SHA256  $BUN"         | sha256sum -c --status - || {
+    echo "Bun 哈希不符：$BUN（版本应与上游 BunVersion 一致）" >&2; exit 1; }
 fi
 
 TMP="$(mktemp -d)"
@@ -101,4 +109,11 @@ cp -f "$TMP/usr/lib/libffi.so"       "$JNI/libffi.so"
 cp -f "$TMP/usr/lib/libandroid-support.so" "$JNI/libandroid-support.so"
 cp -f "$MAGPIE"                      "$JNI/libmagpie.so"
 chmod 644 "$JNI"/*.so
+
+# Bun 必须放在 chmod 644 之后：上面的通配会把所有 .so 收成 644，
+# 而 bun 是要被 exec 的可执行文件，权限不对就会在真机上退化成
+#   fork/exec …/libbun.so: permission denied
+# 这正是这个改动要修的那个 bug，别在最后一步又把它带回来。
+cp -f "$BUN" "$JNI/libbun.so"
+chmod 0755 "$JNI/libbun.so"
 echo "runtime libs ready in $JNI"

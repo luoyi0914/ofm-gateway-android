@@ -668,13 +668,16 @@ function parseBodyJSON(body) {
  * is privileged adapter-only access. The caller admits trusted UI requests and
  * enforces its own origin policy before proxy(). close() is terminal.
  */
-export function createMagpieEngine({ dataDir, logger, binary } = {}) {
+export function createMagpieEngine({ dataDir, logger, binary, bun } = {}) {
   if (typeof dataDir !== 'string' || !path.isAbsolute(dataDir)) throw new TypeError('dataDir must be an absolute path')
   let metadata = {}
   try { metadata = JSON.parse(readFileSync(path.join(vendor, 'engine.json'), 'utf8')) } catch {}
   const target = `${process.platform}-${process.arch}`
   const entry = metadata.binaries?.[target]
   let executable = binary ? path.resolve(binary) : path.join(vendor, 'bin', `magpie-${target}${process.platform === 'win32' ? '.exe' : ''}`)
+  // Optional host-supplied bun. Only usable if it is actually there: handing the
+  // engine a path that does not exist is worse than letting it download one.
+  const bunExecutable = bun && existsSync(bun) ? path.resolve(bun) : ''
   const home = path.join(dataDir, 'magpie')
   let state = 'stopped'
   let error = null
@@ -833,6 +836,15 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
       await writeJSON(path.join(config, 'settings.json'), {
         ...prefs, port: gatewayPort, lan: false,
         noAutoUpdate: true, noAutoDownload: true, autoRestart: false,
+        // The community plugin index lives on a raw.githubusercontent.com dist
+        // branch, which is routinely reset from mainland networks. The engine's
+        // own 「国内镜像」 switch is the only thing that routes it through
+        // cdn.jsdelivr.net (settings.chinaMirror -> source.ChinaFirst -> the
+        // dist reader). It defaults to false upstream, and the user has no
+        // obvious reason to find that switch, so turn it on by default here.
+        // A user who deliberately turns it off keeps that choice: `prefs` is
+        // spread first, and this only applies until their next save.
+        chinaMirror: prefs.chinaMirror ?? true,
       })
       const webKey = randomBytes(32).toString('hex')
       webURL = `http://127.0.0.1:${webPort}`
@@ -848,6 +860,15 @@ export function createMagpieEngine({ dataDir, logger, binary } = {}) {
         MAGPIE_ADDR: `127.0.0.1:${gatewayPort}`, MAGPIE_WEB_KEY: webKey,
         MAGPIE_NO_SHORTCUT: '1',
       })
+      // Bun must run from a read-only, executable location. The engine downloads
+      // its own bun into MAGPIE_HOME/cache/magpie/bun/<ver>/magpie-bun and then
+      // fork/execs it; on Android 10+ the app's private data dir is mounted
+      // noexec, so that exec fails with EACCES and *every* community plugin
+      // install dies with "fork/exec …: permission denied". The host passes us a
+      // bun that lives in the APK's nativeLibraryDir instead; pointing MAGPIE_BUN
+      // at it makes plugin.Bun() short-circuit before it ever downloads anything.
+      // Set after the MAGPIE_* scrub above on purpose — otherwise it is deleted.
+      if (bunExecutable) env.MAGPIE_BUN = bunExecutable
       assertOpen()
       // stderr is captured, not discarded: without it every startup failure
       // (bad ABI, missing system library, refused option, panic) collapses into

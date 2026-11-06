@@ -433,6 +433,12 @@ pub extern "system" fn Java_cn_luoyi0914_ofmgateway_NativeGateway_nativeStart<'l
             .env("PATH", "/system/bin:/system/xbin")
             .env("LD_LIBRARY_PATH", &native)
             .env("OFM_MAGPIE_BINARY", libs.join("libmagpie.so"))
+            // Magpie 装 @magpie-community 插件要 fork/exec bun。它自己下载到
+            // files/…/cache/magpie/bun/<ver>/magpie-bun 会 EACCES：Android 10+ 只允许从
+            // nativeLibraryDir 这类只读目录 exec。bun 因此随包以 libbun.so 分发，
+            // 这里把路径交给 JS 层，由 magpie-engine.js 注入成 MAGPIE_BUN。
+            // 前缀必须是 OFM_：引擎启动前会清掉所有继承的 MAGPIE_* 键。
+            .env("OFM_MAGPIE_BUN", libs.join("libbun.so"))
             .env("OFM_HOME", &data)
             .env("OFM_MANAGED_ROOT", &files)
             .env("HOME", &data)

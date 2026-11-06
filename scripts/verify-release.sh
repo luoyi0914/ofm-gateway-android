@@ -36,8 +36,16 @@ EXPECT_LIBS=(
   libcrypto.so libssl.so libz.so
   libicuuc.so libicui18n.so libicudata.so libsqlite3.so
   libcares.so libffi.so libc++_shared.so libandroid-support.so
+  # bun：Magpie 装 @magpie-community 插件要 fork/exec 一个 bun，而它自己下载到
+  # 应用私有目录再执行会 EACCES（Android 10+ noexec）。只能随包放在这里。
+  libbun.so
 )
-MAX_BYTES=$((72 * 1024 * 1024))
+# 体积预算：libbun.so 压缩后约 33 MiB（86.8 MB → 33.5 MiB），
+# 0.9.4 的基线是 60.1 MiB，加上它约 93.5 MiB。留一点余量到 100 MiB。
+# bun 可执行文件本体的 sha256（与 .cache/bun-android-arm64 及 Magpie 上游
+# internal/plugin/bun.go 的 bunSums 口径一致）。换 Bun 版本时同步更新。
+EXPECT_BUN_SHA256="f2970336bfccf36e4e8a408b25c627122f210e941672f184198c31f4dbd377a0"
+MAX_BYTES=$((100 * 1024 * 1024))
 
 fail=0
 ok()   { printf '  ✓ %s\n' "$*"; }
@@ -109,6 +117,19 @@ unzip -qq -o "$APK" "lib/$EXPECT_ABI/*" -d "$TMP"
 for lib in "${EXPECT_LIBS[@]}"; do
   [ -f "$TMP/lib/$EXPECT_ABI/$lib" ] && ok "$lib 已打包" || bad "缺少 $lib"
 done
+
+# bun 是以 libbun.so 的名义随包的普通可执行文件。AGP 默认会对 jniLibs 跑
+# stripReleaseDebugSymbols，把符号表裁掉（实测 86,800,440 → 86,739,592 B），
+# 于是「我们校验过的二进制」和「用户装到的二进制」不是同一份。build.gradle.kts
+# 里用 keepDebugSymbols 关掉了这个行为，这里再加一道字节级断言兜底。
+if [ -f "$TMP/lib/$EXPECT_ABI/libbun.so" ]; then
+  BUN_SHA=$(sha256sum "$TMP/lib/$EXPECT_ABI/libbun.so" | cut -d' ' -f1)
+  if [ "$BUN_SHA" = "$EXPECT_BUN_SHA256" ]; then
+    ok "libbun.so 与验收过的 Bun 逐字节一致"
+  else
+    bad "libbun.so 被改写过（$BUN_SHA，期望 $EXPECT_BUN_SHA256）——检查 keepDebugSymbols 是否失效"
+  fi
+fi
 
 python3 - "$TMP/lib/$EXPECT_ABI" <<'PY'
 import glob, os, struct, sys

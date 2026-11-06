@@ -14,7 +14,7 @@ val versionProps = Properties().apply {
 
 val ndkVersionPin = "29.0.14206865"
 val requiredRuntimeLibs = listOf(
-    "libnode.so", "libmagpie.so", "libcrypto.so", "libssl.so", "libz.so",
+    "libnode.so", "libmagpie.so", "libbun.so", "libcrypto.so", "libssl.so", "libz.so",
     "libicuuc.so", "libicui18n.so", "libicudata.so", "libsqlite3.so",
     "libcares.so", "libffi.so", "libc++_shared.so", "libandroid-support.so",
 )
@@ -75,6 +75,16 @@ android {
     packaging {
         // Node 需要从 nativeLibraryDir 直接 exec，必须是未压缩的落盘文件。
         jniLibs.useLegacyPackaging = true
+    }
+
+    // AGP 默认会对 jniLibs 里的 .so 跑 stripReleaseDebugSymbols。bun 是以 libbun.so
+    // 的名字混进来的普通可执行文件，strip 会把它的符号表裁掉（86,800,440 → 86,739,592），
+    // 于是「我们校验过的二进制」和「用户装到的二进制」不是同一份。
+    // 这里只对 libbun.so 关掉 strip；其余原生库照常瘦身。
+    androidComponents {
+        onVariants { variant ->
+            variant.packaging.jniLibs.keepDebugSymbols.add("**/libbun.so")
+        }
     }
 
     testOptions {

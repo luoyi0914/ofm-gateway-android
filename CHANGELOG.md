@@ -3,6 +3,42 @@
 本应用是「OFM 本机网关」的无 root 形态：APK 自带 Node 运行时与 Magpie 引擎，
 在本机起一个 OpenAI 兼容网关（默认 `127.0.0.1:15000`），数据不出设备。
 
+## [0.9.5] - 2026-11-05
+
+修掉「装社区插件必定失败」：插件页报 `fork/exec …/magpie-bun: permission denied`，
+同时附带一条社区的 dist 分支连不上。第一条才是主因，第二条是被牵连出来的。
+
+### 这次报的是什么
+
+```
+bun add @magpie-community/opencode-mimo-auth@latest: fork/exec
+/data/user/0/cn.luoyi0914.ofmgateway/files/ofm-data/magpie/cache/magpie/bun/1.4.2/magpie-bun:
+permission denied
+(and from the community repo's dist branch: … read: connection reset by peer)
+```
+
+### 修复
+
+- **Bun 随包分发，不再现下现跑**：Magpie 引擎执行 `bun add` 前会把一份 Bun
+  下载进自己的缓存目录，然后直接 `fork/exec`。Android 的应用私有目录里，
+  落盘的可执行文件**不允许被执行**（W^X），于是每次装插件都卡在这里。
+  这一版把 Bun（arm64，约 83 MB）作为 `libbun.so` 随 APK 打进
+  `nativeLibraryDir`——那里是只读且可执行的，Android 本来就要求从那儿 exec
+  原生库。启动 Node 网关时通过 `OFM_MAGPIE_BUN` 把路径传给引擎，引擎读到
+  `MAGPIE_BUN` 就直接用它，不再下载、不再往私有目录落盘。
+- **注意 `libbun.so` 不能被 strip**：AGP 默认会对 `jniLibs` 里的 `.so` 跑
+  `stripReleaseDebugSymbols`，第一次构建时它把 Bun 的符号表裁掉了
+  （86,800,440 → 86,739,592 字节），于是「我们校验过的二进制」和「用户装到的」
+  不是同一份。已用 `keepDebugSymbols` 单独豁免，并在 `verify-release.sh` 里加了
+  字节级 sha256 断言，被改写就直接拦住不发版。
+- **「国内镜像」默认打开**：社区仓库 dist 分支与 npm 源在大陆经常连不上
+  （就是上面第二条错误）。新装默认 `chinaMirror: true`；用户显式关过的保持关闭。
+
+### 体积
+
+APK 从 60.1 MB 涨到 93.7 MB。`verify-release.sh` 的体积预算从 72 MiB 调到
+100 MiB——不是放宽标准，是 Bun 本身就有 83 MB（压缩后约 33 MB）的固有体积。
+
 ## [0.9.4] - 2026-11-05
 
 修掉上一版诊断出来的真实故障：Magpie 引擎在部分设备的 App 私有存储上**永远起不来**，

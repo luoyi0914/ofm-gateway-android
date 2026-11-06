@@ -257,7 +257,9 @@ export async function startStandalone({
     const subscriptionRuntime = createSubscriptionRuntime({ subscriptions, stats: stores.stats, logger })
     // The model workspace: the same embedded engine the plugin's settings page
     // uses, so both products answer "which providers, which models" the same way.
-    magpieEngine = createMagpieEngine({ dataDir, logger, binary: process.env.OFM_MAGPIE_BINARY || undefined })
+    // bun 必须从只读可执行目录跑：引擎自己下载到应用私有目录再 exec 会 EACCES。
+    // 宿主把 nativeLibraryDir 里的 libbun.so 通过 OFM_MAGPIE_BUN 传进来。
+    magpieEngine = createMagpieEngine({ dataDir, logger, binary: process.env.OFM_MAGPIE_BINARY || undefined, bun: process.env.OFM_MAGPIE_BUN || undefined })
     magpieModels = createMagpieModels({
       engine: magpieEngine, stats: stores.stats, logger,
       onChanged: () => runtime?.syncAggregateCatalog?.(),
